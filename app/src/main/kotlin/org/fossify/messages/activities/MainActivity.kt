@@ -83,6 +83,7 @@ class MainActivity : SimpleActivity() {
     private var storedFontSize = 0
     private var lastSearchedText = ""
     private var bus: EventBus? = null
+    private var isShowingSyncProgress = false
 
     private val binding by viewBinding(ActivityMainBinding::inflate)
 
@@ -94,7 +95,12 @@ class MainActivity : SimpleActivity() {
         setupOptionsMenu()
         refreshMenuItems()
 
-        setupEdgeToEdge(padBottomImeAndSystem = listOf(binding.conversationsList))
+        setupEdgeToEdge(
+            padBottomImeAndSystem = listOf(
+                binding.conversationsList,
+                binding.conversationsProgressBar
+            )
+        )
 
         checkAndDeleteOldRecycleBinMessages()
         clearAllMessagesIfNeeded {
@@ -300,8 +306,12 @@ class MainActivity : SimpleActivity() {
                 listOf()
             }
 
+            val showProgress = shouldShowTelephonySyncProgress(conversations.isEmpty())
             runOnUiThread {
-                setupConversations(conversations, cached = true)
+                if (showProgress) {
+                    showOrHideProgress(show = true, listEmpty = conversations.isEmpty())
+                }
+                setupConversations(conversations, cached = true, keepProgress = showProgress)
                 getNewConversations(
                     (conversations + archived).toMutableList() as ArrayList<Conversation>
                 )
@@ -367,6 +377,7 @@ class MainActivity : SimpleActivity() {
             val allConversations = conversationsDB.getNonArchived() as ArrayList<Conversation>
             runOnUiThread {
                 setupConversations(allConversations)
+                markTelephonySyncFinished()
             }
 
             if (config.appRunCount == 1) {
@@ -402,6 +413,7 @@ class MainActivity : SimpleActivity() {
     private fun setupConversations(
         conversations: ArrayList<Conversation>,
         cached: Boolean = false,
+        keepProgress: Boolean = false,
     ) {
         val sortedConversations = conversations
             .sortedWith(
@@ -410,10 +422,10 @@ class MainActivity : SimpleActivity() {
                 }.thenByDescending { it.date }
             ).toMutableList() as ArrayList<Conversation>
 
-        if (cached && config.appRunCount == 1) {
-            // there are no cached conversations on the first run so we show the
-            // loading placeholder and progress until we are done loading from telephony
-            showOrHideProgress(conversations.isEmpty())
+        if (cached && keepProgress) {
+            if (conversations.isEmpty()) {
+                showOrHideProgress(show = true, listEmpty = true)
+            }
         } else {
             showOrHideProgress(false)
             showOrHidePlaceholder(conversations.isEmpty())
@@ -431,14 +443,53 @@ class MainActivity : SimpleActivity() {
         }
     }
 
-    private fun showOrHideProgress(show: Boolean) {
+    private fun showOrHideProgress(show: Boolean, listEmpty: Boolean = false) {
+        isShowingSyncProgress = show
         if (show) {
             binding.conversationsProgressBar.show()
-            binding.noConversationsPlaceholder.beVisible()
-            binding.noConversationsPlaceholder.text = getString(R.string.loading_messages)
+            if (listEmpty) {
+                binding.noConversationsPlaceholder.beVisible()
+                binding.noConversationsPlaceholder.text = getString(R.string.loading_messages)
+            }
         } else {
             binding.conversationsProgressBar.hide()
-            binding.noConversationsPlaceholder.beGone()
+            if (binding.noConversationsPlaceholder.text == getString(R.string.loading_messages)) {
+                binding.noConversationsPlaceholder.beGone()
+            }
+        }
+    }
+
+    private fun shouldShowTelephonySyncProgress(cachedIsEmpty: Boolean): Boolean {
+        if (cachedIsEmpty) {
+            return true
+        }
+
+        val becameDefault = isDefaultSmsApp() && !config.wasDefaultSmsApp
+        val appUpdated = getAppLastUpdateTime() != config.lastAppUpdateTime
+        return becameDefault || appUpdated
+    }
+
+    private fun markTelephonySyncFinished() {
+        config.wasDefaultSmsApp = isDefaultSmsApp()
+        config.lastAppUpdateTime = getAppLastUpdateTime()
+        if (isShowingSyncProgress) {
+            showOrHideProgress(false)
+        }
+    }
+
+    private fun isDefaultSmsApp(): Boolean {
+        return if (isQPlus()) {
+            getSystemService(RoleManager::class.java)?.isRoleHeld(RoleManager.ROLE_SMS) == true
+        } else {
+            Telephony.Sms.getDefaultSmsPackage(this) == packageName
+        }
+    }
+
+    private fun getAppLastUpdateTime(): Long {
+        return try {
+            packageManager.getPackageInfo(packageName, 0).lastUpdateTime
+        } catch (_: Exception) {
+            0L
         }
     }
 

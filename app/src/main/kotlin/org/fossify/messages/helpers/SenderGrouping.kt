@@ -1,10 +1,10 @@
 package org.fossify.messages.helpers
 
 /**
- * In-memory map of Android thread IDs that belong to the same normalized Indian short code.
+ * In-memory map of Android thread IDs that belong to the same user-defined sender group.
  * Populated whenever conversations are loaded from the telephony provider.
  */
-object IndianShortCodeGrouping {
+object SenderGrouping {
     @Volatile
     private var relatedThreadIds: Map<Long, List<Long>> = emptyMap()
 

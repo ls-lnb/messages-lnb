@@ -54,7 +54,7 @@ import org.fossify.messages.databases.MessagesDatabase
 import org.fossify.messages.helpers.AttachmentUtils.parseAttachmentNames
 import org.fossify.messages.helpers.Config
 import org.fossify.messages.helpers.FILE_SIZE_NONE
-import org.fossify.messages.helpers.IndianShortCodeGrouping
+import org.fossify.messages.helpers.SenderGrouping
 import org.fossify.messages.helpers.MAX_MESSAGE_LENGTH
 import org.fossify.messages.helpers.MESSAGES_LIMIT
 import org.fossify.messages.helpers.MessagingCache
@@ -77,6 +77,9 @@ import org.fossify.messages.models.Message
 import org.fossify.messages.models.MessageAttachment
 import org.fossify.messages.models.NamePhoto
 import org.fossify.messages.models.RecycleBinMessage
+import org.fossify.messages.models.SenderGroup
+import org.fossify.messages.messaging.isShortCodeWithLetters
+import java.util.UUID
 import org.xmlpull.v1.XmlPullParserException
 import java.io.FileNotFoundException
 import kotlin.time.Duration.Companion.minutes
@@ -131,7 +134,7 @@ fun Context.getMessages(
         Sms.STATUS
     )
 
-    val relatedThreadIds = getRelatedShortCodeThreadIds(threadId)
+    val relatedThreadIds = getRelatedGroupedThreadIds(threadId)
     val rangeQuery = if (dateFrom == -1) "" else "AND ${Sms.DATE} < ${dateFrom.toLong() * 1000}"
     val (threadFilter, threadFilterArgs) = sqlThreadIdFilter(relatedThreadIds)
     val selection = "$threadFilter $rangeQuery"
@@ -466,7 +469,7 @@ fun Context.getConversations(
     }
 
     conversations.sortByDescending { it.date }
-    return groupIndianShortCodeConversations(
+    return groupUserSenderConversations(
         conversations = conversations,
         replaceCache = threadId == null
     )
@@ -480,16 +483,17 @@ private fun sqlThreadIdFilter(threadIds: Collection<Long>): Pair<String, Array<S
     }
 }
 
-fun Context.getRelatedShortCodeThreadIds(threadId: Long): List<Long> {
-    if (IndianShortCodeGrouping.hasMapping(threadId)) {
-        return IndianShortCodeGrouping.relatedThreadIds(threadId)
+fun Context.getRelatedGroupedThreadIds(threadId: Long): List<Long> {
+    if (SenderGrouping.hasMapping(threadId)) {
+        return SenderGrouping.relatedThreadIds(threadId)
     }
 
     val phoneNumbers = getThreadPhoneNumbers(getThreadRecipientIds(threadId))
     if (phoneNumbers.size != 1) {
         return listOf(threadId)
     }
-    val normalized = phoneNumbers.first().normalizedIndianShortCodeSender() ?: return listOf(threadId)
+    val group = config.findSenderGroupByAddress(phoneNumbers.first()) ?: return listOf(threadId)
+    val groupAddresses = group.addresses.map { it.uppercase() }.toSet()
 
     val relatedIds = ArrayList<Long>()
     val uri = "${Threads.CONTENT_URI}?simple=true".toUri()
@@ -501,7 +505,7 @@ fun Context.getRelatedShortCodeThreadIds(threadId: Long): List<Long> {
             val rawIds = cursor.getStringValue(Threads.RECIPIENT_IDS)
             val recipientIds = rawIds.split(" ").filter { it.areDigitsOnly() }.map { it.toInt() }
             val numbers = getThreadPhoneNumbers(recipientIds)
-            if (numbers.size == 1 && numbers.first().normalizedIndianShortCodeSender() == normalized) {
+            if (numbers.size == 1 && numbers.first().uppercase() in groupAddresses) {
                 relatedIds.add(id)
             }
         }
@@ -510,56 +514,69 @@ fun Context.getRelatedShortCodeThreadIds(threadId: Long): List<Long> {
     }
 
     val ids = relatedIds.ifEmpty { arrayListOf(threadId) }
-    IndianShortCodeGrouping.updateGroups(listOf(ids))
+    SenderGrouping.updateGroups(listOf(ids))
     return ids
 }
 
-private fun groupIndianShortCodeConversations(
+private fun Context.groupUserSenderConversations(
     conversations: ArrayList<Conversation>,
     replaceCache: Boolean,
 ): ArrayList<Conversation> {
+    val senderGroups = config.senderGroups
+    if (senderGroups.isEmpty()) {
+        if (replaceCache) {
+            SenderGrouping.updateGroups(emptyList())
+        }
+        return conversations
+    }
+
+    val addressToGroupId = HashMap<String, String>()
+    val groupsById = senderGroups.associateBy { it.id }
+    for (group in senderGroups) {
+        for (address in group.addresses) {
+            addressToGroupId[address.uppercase()] = group.id
+        }
+    }
+
     val grouped = LinkedHashMap<String, Conversation>()
-    val groupIds = LinkedHashMap<String, MutableList<Long>>()
+    val groupThreadIds = LinkedHashMap<String, MutableList<Long>>()
     val passthrough = ArrayList<Conversation>()
     val passthroughIds = ArrayList<List<Long>>()
 
     for (conversation in conversations) {
-        if (conversation.isGroupConversation) {
+        val groupId = if (!conversation.isGroupConversation) {
+            addressToGroupId[conversation.phoneNumber.uppercase()]
+        } else {
+            null
+        }
+
+        if (groupId == null) {
             passthrough.add(conversation)
             passthroughIds.add(listOf(conversation.threadId))
             continue
         }
 
-        val key = conversation.phoneNumber.normalizedIndianShortCodeSender()
-        if (key == null) {
-            passthrough.add(conversation)
-            passthroughIds.add(listOf(conversation.threadId))
-            continue
-        }
-
-        groupIds.getOrPut(key) { mutableListOf() }.add(conversation.threadId)
-        val existing = grouped[key]
+        val senderGroup = groupsById.getValue(groupId)
+        groupThreadIds.getOrPut(groupId) { mutableListOf() }.add(conversation.threadId)
+        val existing = grouped[groupId]
         if (existing == null) {
-            grouped[key] = conversation.copy(
-                title = if (conversation.usesCustomTitle) conversation.title else key
+            grouped[groupId] = conversation.copy(
+                title = senderGroup.title,
+                usesCustomTitle = true
             )
         } else {
-            grouped[key] = existing.copy(
+            grouped[groupId] = existing.copy(
                 read = existing.read && conversation.read,
                 unreadCount = existing.unreadCount + conversation.unreadCount,
                 isArchived = existing.isArchived && conversation.isArchived,
-                usesCustomTitle = existing.usesCustomTitle || conversation.usesCustomTitle,
-                title = when {
-                    existing.usesCustomTitle -> existing.title
-                    conversation.usesCustomTitle -> conversation.title
-                    else -> existing.title
-                }
+                title = senderGroup.title,
+                usesCustomTitle = true
             )
         }
     }
 
     if (replaceCache) {
-        IndianShortCodeGrouping.updateGroups(groupIds.values + passthroughIds)
+        SenderGrouping.updateGroups(groupThreadIds.values + passthroughIds)
     }
 
     val result = ArrayList<Conversation>(passthrough.size + grouped.size)
@@ -567,6 +584,41 @@ private fun groupIndianShortCodeConversations(
     result.addAll(grouped.values)
     result.sortByDescending { it.date }
     return result
+}
+
+fun Conversation.canGroupSenders(): Boolean {
+    return !isGroupConversation && isShortCodeWithLetters(phoneNumber)
+}
+
+fun Context.createOrMergeSenderGroup(conversations: List<Conversation>, title: String) {
+    val selectedAddresses = conversations.map { it.phoneNumber.uppercase() }.toSet()
+    val existing = config.senderGroups
+    val addresses = LinkedHashSet<String>()
+    val groupsToRemove = HashSet<String>()
+
+    for (group in existing) {
+        if (group.addresses.any { it.uppercase() in selectedAddresses }) {
+            addresses.addAll(group.addresses.map { it.uppercase() })
+            groupsToRemove.add(group.id)
+        }
+    }
+    addresses.addAll(selectedAddresses)
+
+    val keepId = existing.firstOrNull { it.id in groupsToRemove }?.id ?: UUID.randomUUID().toString()
+    val newGroup = SenderGroup(id = keepId, title = title, addresses = addresses.toList())
+    config.senderGroups = existing.filter { it.id !in groupsToRemove } + newGroup
+    SenderGrouping.updateGroups(emptyList())
+}
+
+fun Context.removeSenderGroupsForConversations(conversations: List<Conversation>) {
+    val groupIds = conversations.mapNotNull {
+        config.findSenderGroupByAddress(it.phoneNumber)?.id
+    }.toSet()
+    if (groupIds.isEmpty()) {
+        return
+    }
+    config.senderGroups = config.senderGroups.filter { it.id !in groupIds }
+    SenderGrouping.updateGroups(emptyList())
 }
 
 private fun Context.queryCursorUnsafe(
@@ -971,7 +1023,7 @@ fun Context.removeAllArchivedConversations(callback: (() -> Unit)? = null) {
 }
 
 fun Context.deleteConversation(threadId: Long) {
-    val relatedThreadIds = getRelatedShortCodeThreadIds(threadId)
+    val relatedThreadIds = getRelatedGroupedThreadIds(threadId)
     relatedThreadIds.forEach { id ->
         var uri = Sms.CONTENT_URI
         val selection = "${Sms.THREAD_ID} = ?"
@@ -1058,7 +1110,7 @@ fun Context.restoreMessageFromRecycleBin(id: Long) {
 }
 
 fun Context.updateConversationArchivedStatus(threadId: Long, archived: Boolean) {
-    val relatedThreadIds = getRelatedShortCodeThreadIds(threadId)
+    val relatedThreadIds = getRelatedGroupedThreadIds(threadId)
     val uri = Threads.CONTENT_URI
     val values = ContentValues().apply {
         put(Threads.ARCHIVED, archived)
@@ -1120,7 +1172,7 @@ fun Context.markMessageRead(id: Long, isMMS: Boolean) {
 }
 
 fun Context.markThreadMessagesRead(threadId: Long) {
-    val relatedThreadIds = getRelatedShortCodeThreadIds(threadId)
+    val relatedThreadIds = getRelatedGroupedThreadIds(threadId)
     relatedThreadIds.forEach { id ->
         val idString = id.toString()
 
@@ -1146,7 +1198,7 @@ fun Context.markThreadMessagesRead(threadId: Long) {
 }
 
 fun Context.markThreadMessagesUnread(threadId: Long) {
-    val relatedThreadIds = getRelatedShortCodeThreadIds(threadId)
+    val relatedThreadIds = getRelatedGroupedThreadIds(threadId)
     relatedThreadIds.forEach { id ->
         arrayOf(Sms.CONTENT_URI, Mms.CONTENT_URI).forEach { uri ->
             val contentValues = ContentValues().apply {
@@ -1391,6 +1443,12 @@ fun Context.renameConversation(conversation: Conversation, newTitle: String): Co
     val updatedConv = conversation.copy(title = newTitle, usesCustomTitle = true)
     try {
         conversationsDB.insertOrUpdate(updatedConv)
+        val group = config.findSenderGroupByAddress(conversation.phoneNumber)
+        if (group != null) {
+            config.senderGroups = config.senderGroups.map {
+                if (it.id == group.id) it.copy(title = newTitle) else it
+            }
+        }
         ensureBackgroundThread {
             shortcutHelper.createOrUpdateShortcut(updatedConv)
         }

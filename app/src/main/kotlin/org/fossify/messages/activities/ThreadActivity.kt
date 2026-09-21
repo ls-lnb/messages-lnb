@@ -112,6 +112,7 @@ import org.fossify.messages.adapters.ThreadAdapter
 import org.fossify.messages.databinding.ActivityThreadBinding
 import org.fossify.messages.databinding.ItemSelectedContactBinding
 import org.fossify.messages.dialogs.GroupMessageSendDialog
+import org.fossify.messages.dialogs.GroupedSendersDialog
 import org.fossify.messages.dialogs.InvalidNumberDialog
 import org.fossify.messages.dialogs.RenameConversationDialog
 import org.fossify.messages.dialogs.ScheduleMessageDialog
@@ -131,7 +132,7 @@ import org.fossify.messages.extensions.getAddresses
 import org.fossify.messages.extensions.getDefaultKeyboardHeight
 import org.fossify.messages.extensions.getFileSizeFromUri
 import org.fossify.messages.extensions.getMessages
-import org.fossify.messages.extensions.getRelatedShortCodeThreadIds
+import org.fossify.messages.extensions.getRelatedGroupedThreadIds
 import org.fossify.messages.extensions.getSmsDraft
 import org.fossify.messages.extensions.getThreadId
 import org.fossify.messages.extensions.getThreadParticipants
@@ -147,6 +148,7 @@ import org.fossify.messages.extensions.messagesDB
 import org.fossify.messages.extensions.moveMessageToRecycleBin
 import org.fossify.messages.extensions.onScroll
 import org.fossify.messages.extensions.removeDiacriticsIfNeeded
+import org.fossify.messages.extensions.removeSenderGroupsForConversations
 import org.fossify.messages.extensions.renameConversation
 import org.fossify.messages.extensions.restoreAllMessagesFromRecycleBinForConversation
 import org.fossify.messages.extensions.restoreMessageFromRecycleBin
@@ -363,8 +365,13 @@ class ThreadActivity : SimpleActivity() {
                 threadItems.isNotEmpty() && conversation?.isArchived == false && !isRecycleBin && archiveAvailable
             findItem(R.id.unarchive).isVisible =
                 threadItems.isNotEmpty() && conversation?.isArchived == true && !isRecycleBin && archiveAvailable
+            val isSenderGroup = conversation?.let {
+                config.findSenderGroupByAddress(it.phoneNumber) != null
+            } == true
             findItem(R.id.rename_conversation).isVisible =
-                participants.size > 1 && conversation != null && !isRecycleBin
+                conversation != null && !isRecycleBin && (participants.size > 1 || isSenderGroup)
+            findItem(R.id.show_grouped_senders).isVisible = isSenderGroup && !isRecycleBin
+            findItem(R.id.ungroup_senders).isVisible = isSenderGroup && !isRecycleBin
             findItem(R.id.conversation_details).isVisible = conversation != null && !isRecycleBin
             findItem(R.id.block_number).title =
                 addLockedLabelIfNeeded(org.fossify.commons.R.string.block_number)
@@ -397,6 +404,8 @@ class ThreadActivity : SimpleActivity() {
             R.id.archive -> archiveConversation()
             R.id.unarchive -> unarchiveConversation()
             R.id.rename_conversation -> renameConversation()
+            R.id.show_grouped_senders -> showGroupedSenders()
+            R.id.ungroup_senders -> askConfirmUngroupSenders()
             R.id.conversation_details -> launchConversationDetails(threadId)
             R.id.add_number_to_contact -> addNumberToContact()
             R.id.copy_number -> copyNumberToClipboard()
@@ -435,7 +444,7 @@ class ThreadActivity : SimpleActivity() {
     private fun setupCachedMessages(callback: () -> Unit) {
         ensureBackgroundThread {
             messages = try {
-                val relatedThreadIds = getRelatedShortCodeThreadIds(threadId)
+                val relatedThreadIds = getRelatedGroupedThreadIds(threadId)
                 if (isRecycleBin) {
                     relatedThreadIds.flatMap { messagesDB.getThreadMessagesFromRecycleBin(it) }
                 } else {
@@ -492,7 +501,7 @@ class ThreadActivity : SimpleActivity() {
             if (!isRecycleBin) {
                 messages = getMessages(threadId)
                 if (config.useRecycleBin) {
-                    val recycledMessages = getRelatedShortCodeThreadIds(threadId)
+                    val recycledMessages = getRelatedGroupedThreadIds(threadId)
                         .flatMap { messagesDB.getThreadMessagesFromRecycleBin(it) }
                     messages = messages.filterNotInByKey(recycledMessages) { it.getStableId() }
                 }
@@ -1312,6 +1321,25 @@ class ThreadActivity : SimpleActivity() {
             type = "vnd.android.cursor.item/contact"
             putExtra(KEY_PHONE, phoneNumber)
             launchActivityIntent(this)
+        }
+    }
+
+    private fun showGroupedSenders() {
+        val address = conversation?.phoneNumber ?: return
+        val group = config.findSenderGroupByAddress(address) ?: return
+        GroupedSendersDialog(this, group.addresses.sorted())
+    }
+
+    private fun askConfirmUngroupSenders() {
+        val currentConversation = conversation ?: return
+        ConfirmationDialog(this, getString(R.string.ungroup_senders_confirmation)) {
+            ensureBackgroundThread {
+                removeSenderGroupsForConversations(listOf(currentConversation))
+                runOnUiThread {
+                    refreshConversations()
+                    finish()
+                }
+            }
         }
     }
 

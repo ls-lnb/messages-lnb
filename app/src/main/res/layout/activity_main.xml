@@ -31,14 +31,18 @@
 
                 <com.google.android.material.progressindicator.LinearProgressIndicator
                     android:id="@+id/conversations_progress_bar"
-                    android:layout_width="match_parent"
+                    android:layout_width="128dp"
                     android:layout_height="wrap_content"
-                    android:layout_alignParentTop="true"
+                    android:layout_alignParentBottom="true"
+                    android:layout_centerHorizontal="true"
+                    android:layout_marginBottom="24dp"
                     android:indeterminate="true"
                     android:visibility="gone"
                     app:hideAnimationBehavior="outward"
                     app:showAnimationBehavior="inward"
-                    app:showDelay="250"
+                    app:showDelay="200"
+                    app:trackCornerRadius="8dp"
+                    app:trackThickness="5dp"
                     tools:visibility="visible" />
 
                 <org.fossify.commons.views.MyTextView

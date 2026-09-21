@@ -36,6 +36,12 @@
     <string name="conversation_details">Conversation details</string>
     <string name="rename_conversation">Rename conversation</string>
     <string name="rename_conversation_warning">Only you can see this conversation name</string>
+    <string name="group_senders">Group senders</string>
+    <string name="ungroup_senders">Ungroup senders</string>
+    <string name="show_grouped_senders">Show grouped senders</string>
+    <string name="grouped_senders">Grouped senders</string>
+    <string name="group_name">Group name</string>
+    <string name="ungroup_senders_confirmation">Split these senders back into separate conversations?</string>
     <!-- Schedule send -->
     <string name="scheduled_message">Scheduled message</string>
     <string name="schedule_message">Schedule message</string>

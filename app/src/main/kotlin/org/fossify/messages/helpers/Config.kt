@@ -4,6 +4,7 @@ import android.content.Context
 import org.fossify.commons.helpers.BaseConfig
 import org.fossify.messages.extensions.getDefaultKeyboardHeight
 import org.fossify.messages.models.Conversation
+import org.fossify.messages.models.SenderGroup
 
 class Config(context: Context) : BaseConfig(context) {
     companion object {
@@ -151,4 +152,23 @@ class Config(context: Context) : BaseConfig(context) {
         get() = prefs.getBoolean(KEEP_CONVERSATIONS_ARCHIVED, false)
         set(keepConversationsArchived) = prefs.edit()
             .putBoolean(KEEP_CONVERSATIONS_ARCHIVED, keepConversationsArchived).apply()
+
+    var senderGroups: List<SenderGroup>
+        get() = SenderGroup.fromJson(prefs.getString(SENDER_GROUPS, "[]")!!)
+        set(senderGroups) = prefs.edit()
+            .putString(SENDER_GROUPS, SenderGroup.toJson(senderGroups)).apply()
+
+    fun findSenderGroupByAddress(address: String): SenderGroup? {
+        return senderGroups.firstOrNull { it.containsAddress(address) }
+    }
+
+    var lastAppUpdateTime: Long
+        get() = prefs.getLong(LAST_APP_UPDATE_TIME, 0L)
+        set(lastAppUpdateTime) = prefs.edit()
+            .putLong(LAST_APP_UPDATE_TIME, lastAppUpdateTime).apply()
+
+    var wasDefaultSmsApp: Boolean
+        get() = prefs.getBoolean(WAS_DEFAULT_SMS_APP, false)
+        set(wasDefaultSmsApp) = prefs.edit()
+            .putBoolean(WAS_DEFAULT_SMS_APP, wasDefaultSmsApp).apply()
 }
