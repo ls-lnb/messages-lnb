@@ -183,6 +183,7 @@ import org.fossify.messages.helpers.THREAD_TEXT
 import org.fossify.messages.helpers.THREAD_TITLE
 import org.fossify.messages.helpers.generateRandomId
 import org.fossify.messages.helpers.refreshConversations
+import org.fossify.messages.helpers.requestTelephonySyncProgress
 import org.fossify.messages.helpers.refreshMessages
 import org.fossify.messages.messaging.cancelScheduleSendPendingIntent
 import org.fossify.messages.messaging.isLongMmsMessage
@@ -1333,6 +1334,7 @@ class ThreadActivity : SimpleActivity() {
     private fun askConfirmUngroupSenders() {
         val currentConversation = conversation ?: return
         ConfirmationDialog(this, getString(R.string.ungroup_senders_confirmation)) {
+            requestTelephonySyncProgress()
             ensureBackgroundThread {
                 removeSenderGroupsForConversations(listOf(currentConversation))
                 runOnUiThread {

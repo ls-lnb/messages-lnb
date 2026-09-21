@@ -15,6 +15,7 @@ import org.fossify.commons.helpers.KEY_PHONE
 import org.fossify.commons.helpers.ensureBackgroundThread
 import org.fossify.commons.views.MyRecyclerView
 import org.fossify.messages.R
+import org.fossify.messages.activities.MainActivity
 import org.fossify.messages.activities.SimpleActivity
 import org.fossify.messages.dialogs.GroupSendersDialog
 import org.fossify.messages.dialogs.RenameConversationDialog
@@ -30,6 +31,7 @@ import org.fossify.messages.extensions.removeSenderGroupsForConversations
 import org.fossify.messages.extensions.renameConversation
 import org.fossify.messages.extensions.updateConversationArchivedStatus
 import org.fossify.messages.helpers.refreshConversations
+import org.fossify.messages.helpers.requestTelephonySyncProgress
 import org.fossify.messages.messaging.isShortCodeWithLetters
 import org.fossify.messages.models.Conversation
 
@@ -257,6 +259,7 @@ class ConversationsAdapter(
             ?: selectedItems.maxByOrNull { it.date }?.title.orEmpty()
 
         GroupSendersDialog(activity, prefilledName) { name ->
+            showGroupingProgress()
             ensureBackgroundThread {
                 activity.createOrMergeSenderGroup(selectedItems, name)
                 refreshConversationsAndFinishActMode()
@@ -266,11 +269,17 @@ class ConversationsAdapter(
 
     private fun askConfirmUngroup() {
         ConfirmationDialog(activity, activity.getString(R.string.ungroup_senders_confirmation)) {
+            showGroupingProgress()
             ensureBackgroundThread {
                 activity.removeSenderGroupsForConversations(getSelectedItems())
                 refreshConversationsAndFinishActMode()
             }
         }
+    }
+
+    private fun showGroupingProgress() {
+        requestTelephonySyncProgress()
+        (activity as? MainActivity)?.showTelephonySyncProgress()
     }
 
     private fun renameConversation(conversation: Conversation) {

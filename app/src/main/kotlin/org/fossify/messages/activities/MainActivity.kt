@@ -66,6 +66,7 @@ import org.fossify.messages.extensions.messagesDB
 import org.fossify.messages.helpers.SEARCHED_MESSAGE_ID
 import org.fossify.messages.helpers.THREAD_ID
 import org.fossify.messages.helpers.THREAD_TITLE
+import org.fossify.messages.helpers.consumeTelephonySyncProgressRequest
 import org.fossify.messages.models.Conversation
 import org.fossify.messages.models.Events
 import org.fossify.messages.models.Message
@@ -459,8 +460,13 @@ class MainActivity : SimpleActivity() {
         }
     }
 
+    fun showTelephonySyncProgress() {
+        showOrHideProgress(show = true, listEmpty = false)
+    }
+
     private fun shouldShowTelephonySyncProgress(cachedIsEmpty: Boolean): Boolean {
-        if (cachedIsEmpty) {
+        val requested = consumeTelephonySyncProgressRequest()
+        if (cachedIsEmpty || requested) {
             return true
         }
 
