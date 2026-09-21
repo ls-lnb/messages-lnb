@@ -131,6 +131,7 @@ import org.fossify.messages.extensions.getAddresses
 import org.fossify.messages.extensions.getDefaultKeyboardHeight
 import org.fossify.messages.extensions.getFileSizeFromUri
 import org.fossify.messages.extensions.getMessages
+import org.fossify.messages.extensions.getRelatedShortCodeThreadIds
 import org.fossify.messages.extensions.getSmsDraft
 import org.fossify.messages.extensions.getThreadId
 import org.fossify.messages.extensions.getThreadParticipants
@@ -434,13 +435,14 @@ class ThreadActivity : SimpleActivity() {
     private fun setupCachedMessages(callback: () -> Unit) {
         ensureBackgroundThread {
             messages = try {
+                val relatedThreadIds = getRelatedShortCodeThreadIds(threadId)
                 if (isRecycleBin) {
-                    messagesDB.getThreadMessagesFromRecycleBin(threadId)
+                    relatedThreadIds.flatMap { messagesDB.getThreadMessagesFromRecycleBin(it) }
                 } else {
                     if (config.useRecycleBin) {
-                        messagesDB.getNonRecycledThreadMessages(threadId)
+                        relatedThreadIds.flatMap { messagesDB.getNonRecycledThreadMessages(it) }
                     } else {
-                        messagesDB.getThreadMessages(threadId)
+                        relatedThreadIds.flatMap { messagesDB.getThreadMessages(it) }
                     }
                 }
             } catch (e: Exception) {
@@ -490,7 +492,8 @@ class ThreadActivity : SimpleActivity() {
             if (!isRecycleBin) {
                 messages = getMessages(threadId)
                 if (config.useRecycleBin) {
-                    val recycledMessages = messagesDB.getThreadMessagesFromRecycleBin(threadId)
+                    val recycledMessages = getRelatedShortCodeThreadIds(threadId)
+                        .flatMap { messagesDB.getThreadMessagesFromRecycleBin(it) }
                     messages = messages.filterNotInByKey(recycledMessages) { it.getStableId() }
                 }
                 messages = messages.toSortedMessages()

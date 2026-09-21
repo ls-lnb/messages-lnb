@@ -47,3 +47,15 @@ fun String.isZipMimeType(): Boolean {
 fun String.isPlainTextMimeType(): Boolean {
     return lowercase() == "text/plain"
 }
+
+private val indianShortCodeRegex = Regex("^[A-Za-z]{2}-([A-Za-z][A-Za-z0-9-]*)\$")
+
+/**
+ * Indian DLT sender IDs look like `JM-HDFCBK-S` or `AD-AXISBK`.
+ * The first two letters are a carrier/header prefix and should be ignored when grouping.
+ * Returns the normalized sender (e.g. `HDFCBK-S`) or null if this is not that format.
+ */
+fun String.normalizedIndianShortCodeSender(): String? {
+    val match = indianShortCodeRegex.matchEntire(trim()) ?: return null
+    return match.groupValues[1].uppercase()
+}

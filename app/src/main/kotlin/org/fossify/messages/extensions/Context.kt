@@ -54,6 +54,7 @@ import org.fossify.messages.databases.MessagesDatabase
 import org.fossify.messages.helpers.AttachmentUtils.parseAttachmentNames
 import org.fossify.messages.helpers.Config
 import org.fossify.messages.helpers.FILE_SIZE_NONE
+import org.fossify.messages.helpers.IndianShortCodeGrouping
 import org.fossify.messages.helpers.MAX_MESSAGE_LENGTH
 import org.fossify.messages.helpers.MESSAGES_LIMIT
 import org.fossify.messages.helpers.MessagingCache
@@ -130,9 +131,11 @@ fun Context.getMessages(
         Sms.STATUS
     )
 
+    val relatedThreadIds = getRelatedShortCodeThreadIds(threadId)
     val rangeQuery = if (dateFrom == -1) "" else "AND ${Sms.DATE} < ${dateFrom.toLong() * 1000}"
-    val selection = "${Sms.THREAD_ID} = ? $rangeQuery"
-    val selectionArgs = arrayOf(threadId.toString())
+    val (threadFilter, threadFilterArgs) = sqlThreadIdFilter(relatedThreadIds)
+    val selection = "$threadFilter $rangeQuery"
+    val selectionArgs = threadFilterArgs
     val sortOrder = "${Sms.DATE} DESC LIMIT $limit"
 
     val blockStatus = HashMap<String, Boolean>()
@@ -194,12 +197,13 @@ fun Context.getMessages(
         messages.add(message)
     }
 
-    messages.addAll(getMMS(threadId, sortOrder, dateFrom))
+    messages.addAll(getMMS(threadId = null, sortOrder = sortOrder, dateFrom = dateFrom, threadIds = relatedThreadIds))
 
     if (includeScheduledMessages) {
         try {
-            val scheduledMessages = messagesDB.getScheduledThreadMessages(threadId)
-            messages.addAll(scheduledMessages)
+            relatedThreadIds.forEach { id ->
+                messages.addAll(messagesDB.getScheduledThreadMessages(id))
+            }
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -221,6 +225,7 @@ fun Context.getMMS(
     sortOrder: String? = null,
     dateFrom: Int = -1,
     uri: Uri = Mms.CONTENT_URI,
+    threadIds: Collection<Long>? = null,
 ): ArrayList<Message> {
     val projection = arrayOf(
         Mms._ID,
@@ -234,16 +239,19 @@ fun Context.getMMS(
 
     var selection: String? = null
     var selectionArgs: Array<String>? = null
+    val ids = threadIds ?: threadId?.let { listOf(it) }
 
-    if (threadId == null && dateFrom != -1) {
+    if (ids.isNullOrEmpty() && dateFrom != -1) {
         // Should not multiply 1000 here, because date in mms's database is different from sms's.
         selection = "${Sms.DATE} < ${dateFrom.toLong()}"
-    } else if (threadId != null && dateFrom == -1) {
-        selection = "${Sms.THREAD_ID} = ?"
-        selectionArgs = arrayOf(threadId.toString())
-    } else if (threadId != null) {
-        selection = "${Sms.THREAD_ID} = ? AND ${Sms.DATE} < ${dateFrom.toLong()}"
-        selectionArgs = arrayOf(threadId.toString())
+    } else if (!ids.isNullOrEmpty() && dateFrom == -1) {
+        val filter = sqlThreadIdFilter(ids)
+        selection = filter.first
+        selectionArgs = filter.second
+    } else if (!ids.isNullOrEmpty()) {
+        val filter = sqlThreadIdFilter(ids)
+        selection = "${filter.first} AND ${Sms.DATE} < ${dateFrom.toLong()}"
+        selectionArgs = filter.second
     }
 
     val messages = ArrayList<Message>()
@@ -458,7 +466,107 @@ fun Context.getConversations(
     }
 
     conversations.sortByDescending { it.date }
-    return conversations
+    return groupIndianShortCodeConversations(
+        conversations = conversations,
+        replaceCache = threadId == null
+    )
+}
+
+private fun sqlThreadIdFilter(threadIds: Collection<Long>): Pair<String, Array<String>?> {
+    return if (threadIds.size == 1) {
+        "${Sms.THREAD_ID} = ?" to arrayOf(threadIds.first().toString())
+    } else {
+        "${Sms.THREAD_ID} IN (${threadIds.joinToString(",")})" to null
+    }
+}
+
+fun Context.getRelatedShortCodeThreadIds(threadId: Long): List<Long> {
+    if (IndianShortCodeGrouping.hasMapping(threadId)) {
+        return IndianShortCodeGrouping.relatedThreadIds(threadId)
+    }
+
+    val phoneNumbers = getThreadPhoneNumbers(getThreadRecipientIds(threadId))
+    if (phoneNumbers.size != 1) {
+        return listOf(threadId)
+    }
+    val normalized = phoneNumbers.first().normalizedIndianShortCodeSender() ?: return listOf(threadId)
+
+    val relatedIds = ArrayList<Long>()
+    val uri = "${Threads.CONTENT_URI}?simple=true".toUri()
+    val projection = arrayOf(Threads._ID, Threads.RECIPIENT_IDS)
+    val selection = "${Threads.MESSAGE_COUNT} > 0"
+    try {
+        queryCursor(uri, projection, selection, showErrors = false) { cursor ->
+            val id = cursor.getLongValue(Threads._ID)
+            val rawIds = cursor.getStringValue(Threads.RECIPIENT_IDS)
+            val recipientIds = rawIds.split(" ").filter { it.areDigitsOnly() }.map { it.toInt() }
+            val numbers = getThreadPhoneNumbers(recipientIds)
+            if (numbers.size == 1 && numbers.first().normalizedIndianShortCodeSender() == normalized) {
+                relatedIds.add(id)
+            }
+        }
+    } catch (_: Exception) {
+        return listOf(threadId)
+    }
+
+    val ids = relatedIds.ifEmpty { arrayListOf(threadId) }
+    IndianShortCodeGrouping.updateGroups(listOf(ids))
+    return ids
+}
+
+private fun groupIndianShortCodeConversations(
+    conversations: ArrayList<Conversation>,
+    replaceCache: Boolean,
+): ArrayList<Conversation> {
+    val grouped = LinkedHashMap<String, Conversation>()
+    val groupIds = LinkedHashMap<String, MutableList<Long>>()
+    val passthrough = ArrayList<Conversation>()
+    val passthroughIds = ArrayList<List<Long>>()
+
+    for (conversation in conversations) {
+        if (conversation.isGroupConversation) {
+            passthrough.add(conversation)
+            passthroughIds.add(listOf(conversation.threadId))
+            continue
+        }
+
+        val key = conversation.phoneNumber.normalizedIndianShortCodeSender()
+        if (key == null) {
+            passthrough.add(conversation)
+            passthroughIds.add(listOf(conversation.threadId))
+            continue
+        }
+
+        groupIds.getOrPut(key) { mutableListOf() }.add(conversation.threadId)
+        val existing = grouped[key]
+        if (existing == null) {
+            grouped[key] = conversation.copy(
+                title = if (conversation.usesCustomTitle) conversation.title else key
+            )
+        } else {
+            grouped[key] = existing.copy(
+                read = existing.read && conversation.read,
+                unreadCount = existing.unreadCount + conversation.unreadCount,
+                isArchived = existing.isArchived && conversation.isArchived,
+                usesCustomTitle = existing.usesCustomTitle || conversation.usesCustomTitle,
+                title = when {
+                    existing.usesCustomTitle -> existing.title
+                    conversation.usesCustomTitle -> conversation.title
+                    else -> existing.title
+                }
+            )
+        }
+    }
+
+    if (replaceCache) {
+        IndianShortCodeGrouping.updateGroups(groupIds.values + passthroughIds)
+    }
+
+    val result = ArrayList<Conversation>(passthrough.size + grouped.size)
+    result.addAll(passthrough)
+    result.addAll(grouped.values)
+    result.sortByDescending { it.date }
+    return result
 }
 
 private fun Context.queryCursorUnsafe(
@@ -863,32 +971,35 @@ fun Context.removeAllArchivedConversations(callback: (() -> Unit)? = null) {
 }
 
 fun Context.deleteConversation(threadId: Long) {
-    var uri = Sms.CONTENT_URI
-    val selection = "${Sms.THREAD_ID} = ?"
-    val selectionArgs = arrayOf(threadId.toString())
-    try {
-        contentResolver.delete(uri, selection, selectionArgs)
-    } catch (e: Exception) {
-        showErrorToast(e)
-    }
+    val relatedThreadIds = getRelatedShortCodeThreadIds(threadId)
+    relatedThreadIds.forEach { id ->
+        var uri = Sms.CONTENT_URI
+        val selection = "${Sms.THREAD_ID} = ?"
+        val selectionArgs = arrayOf(id.toString())
+        try {
+            contentResolver.delete(uri, selection, selectionArgs)
+        } catch (e: Exception) {
+            showErrorToast(e)
+        }
 
-    uri = Mms.CONTENT_URI
-    try {
-        contentResolver.delete(uri, selection, selectionArgs)
-    } catch (e: Exception) {
-        e.printStackTrace()
-    }
+        uri = Mms.CONTENT_URI
+        try {
+            contentResolver.delete(uri, selection, selectionArgs)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
 
-    conversationsDB.deleteThreadId(threadId)
-    messagesDB.deleteThreadMessages(threadId)
-    MessagingCache.participantsCache.remove(threadId)
+        conversationsDB.deleteThreadId(id)
+        messagesDB.deleteThreadMessages(id)
+        MessagingCache.participantsCache.remove(id)
 
-    if (config.customNotifications.contains(threadId.toString())) {
-        config.removeCustomNotificationsByThreadId(threadId)
-        notificationManager.deleteNotificationChannel(threadId.toString())
-    }
-    if(shortcutHelper.getShortcut(threadId) != null) {
-        shortcutHelper.removeShortcutForThread(threadId)
+        if (config.customNotifications.contains(id.toString())) {
+            config.removeCustomNotificationsByThreadId(id)
+            notificationManager.deleteNotificationChannel(id.toString())
+        }
+        if (shortcutHelper.getShortcut(id) != null) {
+            shortcutHelper.removeShortcutForThread(id)
+        }
     }
 }
 
@@ -947,29 +1058,32 @@ fun Context.restoreMessageFromRecycleBin(id: Long) {
 }
 
 fun Context.updateConversationArchivedStatus(threadId: Long, archived: Boolean) {
+    val relatedThreadIds = getRelatedShortCodeThreadIds(threadId)
     val uri = Threads.CONTENT_URI
     val values = ContentValues().apply {
         put(Threads.ARCHIVED, archived)
     }
-    val selection = "${Threads._ID} = ?"
-    val selectionArgs = arrayOf(threadId.toString())
-    try {
-        contentResolver.update(uri, values, selection, selectionArgs)
-    } catch (sqliteException: SQLiteException) {
-        if (
-            sqliteException.message?.contains("no such column: archived") == true
-            && config.isArchiveAvailable
-        ) {
-            config.isArchiveAvailable = false
-            return
-        } else {
-            throw sqliteException
+    relatedThreadIds.forEach { id ->
+        val selection = "${Threads._ID} = ?"
+        val selectionArgs = arrayOf(id.toString())
+        try {
+            contentResolver.update(uri, values, selection, selectionArgs)
+        } catch (sqliteException: SQLiteException) {
+            if (
+                sqliteException.message?.contains("no such column: archived") == true
+                && config.isArchiveAvailable
+            ) {
+                config.isArchiveAvailable = false
+                return
+            } else {
+                throw sqliteException
+            }
         }
-    }
-    if (archived) {
-        conversationsDB.moveToArchive(threadId)
-    } else {
-        conversationsDB.unarchive(threadId)
+        if (archived) {
+            conversationsDB.moveToArchive(id)
+        } else {
+            conversationsDB.unarchive(id)
+        }
     }
 }
 
@@ -1006,39 +1120,45 @@ fun Context.markMessageRead(id: Long, isMMS: Boolean) {
 }
 
 fun Context.markThreadMessagesRead(threadId: Long) {
-    val id = threadId.toString()
+    val relatedThreadIds = getRelatedShortCodeThreadIds(threadId)
+    relatedThreadIds.forEach { id ->
+        val idString = id.toString()
 
-    val smsValues = ContentValues().apply {
-        put(Sms.READ, 1)
-        put(Sms.SEEN, 1)
+        val smsValues = ContentValues().apply {
+            put(Sms.READ, 1)
+            put(Sms.SEEN, 1)
+        }
+        val smsSelection = "${Sms.THREAD_ID}=? AND ${Sms.TYPE}=? AND (${Sms.READ}=? OR ${Sms.SEEN}=?)"
+        val smsArgs = arrayOf(idString, Sms.MESSAGE_TYPE_INBOX.toString(), "0", "0")
+        contentResolver.update(Sms.CONTENT_URI, smsValues, smsSelection, smsArgs)
+
+        val mmsValues = ContentValues().apply {
+            put(Mms.READ, 1)
+            put(Mms.SEEN, 1)
+        }
+        val mmsSelection = "${Mms.THREAD_ID}=? AND ${Mms.MESSAGE_BOX}=? AND (${Mms.READ}=? OR ${Mms.SEEN}=?)"
+        val mmsArgs = arrayOf(idString, Mms.MESSAGE_BOX_INBOX.toString(), "0", "0")
+        contentResolver.update(Mms.CONTENT_URI, mmsValues, mmsSelection, mmsArgs)
+
+        messagesDB.markThreadRead(id)
+        conversationsDB.markRead(id)
     }
-    val smsSelection = "${Sms.THREAD_ID}=? AND ${Sms.TYPE}=? AND (${Sms.READ}=? OR ${Sms.SEEN}=?)"
-    val smsArgs = arrayOf(id, Sms.MESSAGE_TYPE_INBOX.toString(), "0", "0")
-    contentResolver.update(Sms.CONTENT_URI, smsValues, smsSelection, smsArgs)
-
-    val mmsValues = ContentValues().apply {
-        put(Mms.READ, 1)
-        put(Mms.SEEN, 1)
-    }
-    val mmsSelection = "${Mms.THREAD_ID}=? AND ${Mms.MESSAGE_BOX}=? AND (${Mms.READ}=? OR ${Mms.SEEN}=?)"
-    val mmsArgs = arrayOf(id, Mms.MESSAGE_BOX_INBOX.toString(), "0", "0")
-    contentResolver.update(Mms.CONTENT_URI, mmsValues, mmsSelection, mmsArgs)
-
-    messagesDB.markThreadRead(threadId)
-    conversationsDB.markRead(threadId)
 }
 
 fun Context.markThreadMessagesUnread(threadId: Long) {
-    arrayOf(Sms.CONTENT_URI, Mms.CONTENT_URI).forEach { uri ->
-        val contentValues = ContentValues().apply {
-            put(Sms.READ, 0)
-            put(Sms.SEEN, 0)
+    val relatedThreadIds = getRelatedShortCodeThreadIds(threadId)
+    relatedThreadIds.forEach { id ->
+        arrayOf(Sms.CONTENT_URI, Mms.CONTENT_URI).forEach { uri ->
+            val contentValues = ContentValues().apply {
+                put(Sms.READ, 0)
+                put(Sms.SEEN, 0)
+            }
+            val selection = "${Sms.THREAD_ID} = ?"
+            val selectionArgs = arrayOf(id.toString())
+            contentResolver.update(uri, contentValues, selection, selectionArgs)
         }
-        val selection = "${Sms.THREAD_ID} = ?"
-        val selectionArgs = arrayOf(threadId.toString())
-        contentResolver.update(uri, contentValues, selection, selectionArgs)
+        conversationsDB.markUnread(id)
     }
-    conversationsDB.markUnread(threadId)
 } 
 
 @SuppressLint("NewApi")
