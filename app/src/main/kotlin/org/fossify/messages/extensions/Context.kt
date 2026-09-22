@@ -534,6 +534,40 @@ fun Context.getThreadIdsForAddresses(addresses: Collection<String>): List<Long> 
     return ids.toList()
 }
 
+fun Context.searchSmsIdsInThreads(threadIds: Collection<Long>, query: String): List<Long> {
+    val trimmed = query.trim()
+    if (threadIds.isEmpty() || trimmed.isEmpty()) {
+        return emptyList()
+    }
+
+    val ids = ArrayList<Long>()
+    val like = "%$trimmed%"
+    threadIds.distinct().chunked(50).forEach { chunk ->
+        val threadFilter = if (chunk.size == 1) {
+            "${Sms.THREAD_ID} = ?"
+        } else {
+            "${Sms.THREAD_ID} IN (${chunk.joinToString(",")})"
+        }
+        val selection = "$threadFilter AND ${Sms.BODY} LIKE ?"
+        val selectionArgs = if (chunk.size == 1) {
+            arrayOf(chunk.first().toString(), like)
+        } else {
+            arrayOf(like)
+        }
+        queryCursor(
+            uri = Sms.CONTENT_URI,
+            projection = arrayOf(Sms._ID),
+            selection = selection,
+            selectionArgs = selectionArgs,
+            sortOrder = "${Sms.DATE} ASC, ${Sms._ID} ASC",
+            showErrors = false
+        ) { cursor ->
+            ids.add(cursor.getLongValue(Sms._ID))
+        }
+    }
+    return ids.distinct()
+}
+
 fun Context.getShortCodeSenderAddresses(): List<String> {
     val addresses = LinkedHashSet<String>()
     val uri = Uri.withAppendedPath(MmsSms.CONTENT_URI, "canonical-addresses")

@@ -48,6 +48,12 @@
     <string name="select_at_least_two_senders">Select at least two senders</string>
     <string name="selected_senders_count">%d selected</string>
     <string name="in_sender_group">In group: %s</string>
+    <string name="search_in_conversation">Search in conversation</string>
+    <string name="previous_match">Previous match</string>
+    <string name="next_match">Next match</string>
+    <string name="hide_search">Close search</string>
+    <string name="search_match_count">%1$d/%2$d</string>
+    <string name="no_search_matches">No matches</string>
     <string name="group_name">Group name</string>
     <string name="ungroup_senders_confirmation">Split these senders back into separate conversations?</string>
     <!-- Schedule send -->

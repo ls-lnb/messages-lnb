@@ -4,6 +4,12 @@
     xmlns:tools="http://schemas.android.com/tools"
     tools:ignore="AppCompatResource,AlwaysShowAction">
     <item
+        android:id="@+id/search_grouped_messages"
+        android:icon="@drawable/ic_search_vector"
+        android:showAsAction="ifRoom"
+        android:title="@string/search_in_conversation"
+        app:showAsAction="ifRoom" />
+    <item
         android:id="@+id/dial_number"
         android:icon="@drawable/ic_phone_vector"
         android:showAsAction="always"

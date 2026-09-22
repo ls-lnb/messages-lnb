@@ -19,6 +19,69 @@
             app:menu="@menu/menu_thread"
             app:titleTextAppearance="@style/AppTheme.ActionBar.TitleTextStyle" />
 
+        <LinearLayout
+            android:id="@+id/thread_search_holder"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="@dimen/medium_margin"
+            android:paddingTop="@dimen/small_margin"
+            android:paddingEnd="@dimen/medium_margin"
+            android:paddingBottom="@dimen/small_margin"
+            android:visibility="gone"
+            tools:visibility="visible">
+
+            <org.fossify.commons.views.MyEditText
+                android:id="@+id/thread_search_query"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:background="@android:color/transparent"
+                android:hint="@string/search_in_conversation"
+                android:imeOptions="actionSearch"
+                android:inputType="text"
+                android:maxLines="1"
+                android:textSize="@dimen/normal_text_size" />
+
+            <org.fossify.commons.views.MyTextView
+                android:id="@+id/thread_search_count"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="@dimen/small_margin"
+                android:alpha="0.7"
+                android:minWidth="40dp"
+                android:textSize="@dimen/smaller_text_size"
+                tools:text="1/12" />
+
+            <ImageView
+                android:id="@+id/thread_search_prev"
+                android:layout_width="@dimen/normal_icon_size"
+                android:layout_height="@dimen/normal_icon_size"
+                android:background="?selectableItemBackgroundBorderless"
+                android:contentDescription="@string/previous_match"
+                android:padding="@dimen/small_margin"
+                android:src="@drawable/ic_arrow_up_vector" />
+
+            <ImageView
+                android:id="@+id/thread_search_next"
+                android:layout_width="@dimen/normal_icon_size"
+                android:layout_height="@dimen/normal_icon_size"
+                android:background="?selectableItemBackgroundBorderless"
+                android:contentDescription="@string/next_match"
+                android:padding="@dimen/small_margin"
+                android:src="@drawable/ic_arrow_down_vector" />
+
+            <ImageView
+                android:id="@+id/thread_search_close"
+                android:layout_width="@dimen/normal_icon_size"
+                android:layout_height="@dimen/normal_icon_size"
+                android:background="?selectableItemBackgroundBorderless"
+                android:contentDescription="@string/hide_search"
+                android:padding="@dimen/small_margin"
+                android:src="@drawable/ic_cross_vector" />
+        </LinearLayout>
+
     </org.fossify.commons.views.MyAppBarLayout>
 
     <androidx.constraintlayout.widget.ConstraintLayout
