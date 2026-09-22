@@ -1,5 +1,6 @@
 package org.fossify.messages.adapters
 
+import android.content.res.ColorStateList
 import android.util.TypedValue
 import android.view.ViewGroup
 import androidx.recyclerview.widget.RecyclerView
@@ -9,7 +10,7 @@ import org.fossify.commons.extensions.getTextSize
 import org.fossify.messages.R
 import org.fossify.messages.activities.SimpleActivity
 import org.fossify.messages.databinding.ItemSenderPickerBinding
-import org.fossify.messages.models.Conversation
+import org.fossify.messages.models.ShortCodeSender
 
 class SenderPickerAdapter(
     private val activity: SimpleActivity,
@@ -20,7 +21,7 @@ class SenderPickerAdapter(
     private val textColor = activity.getProperTextColor()
     private val primaryColor = activity.getProperPrimaryColor()
     private val fontSize = activity.getTextSize()
-    var senders = ArrayList<Conversation>()
+    var senders = ArrayList<ShortCodeSender>()
         set(value) {
             field = value
             notifyDataSetChanged()
@@ -39,24 +40,24 @@ class SenderPickerAdapter(
 
     inner class ViewHolder(private val binding: ItemSenderPickerBinding) :
         RecyclerView.ViewHolder(binding.root) {
-        fun bind(conversation: Conversation) {
-            val addressKey = conversation.phoneNumber.uppercase()
+        fun bind(sender: ShortCodeSender) {
+            val addressKey = sender.address.uppercase()
             val groupTitle = groupTitles[addressKey]
             binding.senderPickerAddress.apply {
-                text = conversation.phoneNumber
+                text = sender.address
                 setTextColor(textColor)
                 setTextSize(TypedValue.COMPLEX_UNIT_PX, fontSize * 1.1f)
             }
             binding.senderPickerDetails.apply {
                 text = groupTitle?.let {
                     activity.getString(R.string.in_sender_group, it)
-                } ?: conversation.snippet
+                } ?: sender.snippet
                 setTextColor(textColor)
                 setTextSize(TypedValue.COMPLEX_UNIT_PX, fontSize * 0.85f)
             }
             binding.senderPickerCheck.apply {
                 isChecked = selectedAddresses.contains(addressKey)
-                buttonTintList = android.content.res.ColorStateList.valueOf(primaryColor)
+                buttonTintList = ColorStateList.valueOf(primaryColor)
             }
             binding.root.setOnClickListener {
                 if (selectedAddresses.contains(addressKey)) {
@@ -64,7 +65,10 @@ class SenderPickerAdapter(
                 } else {
                     selectedAddresses.add(addressKey)
                 }
-                notifyItemChanged(bindingAdapterPosition)
+                val position = bindingAdapterPosition
+                if (position != RecyclerView.NO_POSITION) {
+                    notifyItemChanged(position)
+                }
                 onSelectionChanged()
             }
         }

@@ -6,6 +6,9 @@ package org.fossify.messages.helpers
  */
 object SenderGrouping {
     @Volatile
+    var pendingUiRefresh = false
+
+    @Volatile
     private var relatedThreadIds: Map<Long, List<Long>> = emptyMap()
 
     fun updateGroups(groups: Collection<List<Long>>) {
@@ -28,5 +31,17 @@ object SenderGrouping {
 
     fun hasMapping(threadId: Long): Boolean {
         return relatedThreadIds.containsKey(threadId)
+    }
+
+    fun mergeGroup(ids: List<Long>) {
+        val distinct = ids.distinct()
+        if (distinct.isEmpty()) {
+            return
+        }
+        val map = HashMap(relatedThreadIds)
+        for (id in distinct) {
+            map[id] = distinct
+        }
+        relatedThreadIds = map
     }
 }

@@ -8,6 +8,9 @@ import org.fossify.messages.models.SenderGroup
 
 class Config(context: Context) : BaseConfig(context) {
     companion object {
+        @Volatile
+        var memorySenderGroups: List<SenderGroup>? = null
+
         fun newInstance(context: Context) = Config(context)
     }
 
@@ -154,12 +157,20 @@ class Config(context: Context) : BaseConfig(context) {
             .putBoolean(KEEP_CONVERSATIONS_ARCHIVED, keepConversationsArchived).apply()
 
     var senderGroups: List<SenderGroup>
-        get() = SenderGroup.fromJson(prefs.getString(SENDER_GROUPS, "[]")!!)
-        set(senderGroups) = prefs.edit()
-            .putString(SENDER_GROUPS, SenderGroup.toJson(senderGroups)).apply()
+        get() = memorySenderGroups ?: SenderGroup.fromJson(prefs.getString(SENDER_GROUPS, "[]")!!).also {
+            memorySenderGroups = it
+        }
+        set(senderGroups) {
+            memorySenderGroups = senderGroups
+            prefs.edit().putString(SENDER_GROUPS, SenderGroup.toJson(senderGroups)).commit()
+        }
 
     fun findSenderGroupByAddress(address: String): SenderGroup? {
         return senderGroups.firstOrNull { it.containsAddress(address) }
+    }
+
+    fun findSenderGroupByThreadId(threadId: Long): SenderGroup? {
+        return senderGroups.firstOrNull { it.containsThreadId(threadId) }
     }
 
     var lastAppUpdateTime: Long

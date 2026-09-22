@@ -13,21 +13,20 @@ import org.fossify.messages.R
 import org.fossify.messages.adapters.SenderPickerAdapter
 import org.fossify.messages.databinding.ActivitySenderPickerBinding
 import org.fossify.messages.dialogs.GroupSendersDialog
-import org.fossify.messages.extensions.canGroupSenders
 import org.fossify.messages.extensions.config
-import org.fossify.messages.extensions.getConversations
+import org.fossify.messages.extensions.conversationsDB
+import org.fossify.messages.extensions.getShortCodeSenderAddresses
 import org.fossify.messages.extensions.saveSenderGroupFromSelection
 import org.fossify.messages.extensions.similarShortCodeKey
 import org.fossify.messages.helpers.PRESELECTED_SENDER_ADDRESSES
 import org.fossify.messages.helpers.SUGGEST_SIMILAR_SENDERS
 import org.fossify.messages.helpers.refreshConversations
-import org.fossify.messages.helpers.requestTelephonySyncProgress
-import org.fossify.messages.models.Conversation
+import org.fossify.messages.models.ShortCodeSender
 
 class SenderPickerActivity : SimpleActivity() {
     private val binding by viewBinding(ActivitySenderPickerBinding::inflate)
     private val selectedAddresses = HashSet<String>()
-    private var allSenders = ArrayList<Conversation>()
+    private var allSenders = ArrayList<ShortCodeSender>()
     private var groupTitles = emptyMap<String, String>()
     private var adapter: SenderPickerAdapter? = null
     private var currentQuery = ""
@@ -78,13 +77,27 @@ class SenderPickerActivity : SimpleActivity() {
     private fun loadSenders() {
         binding.senderPickerProgress.show()
         ensureBackgroundThread {
-            val conversations = getConversations(applySenderGroups = false)
-                .filter { it.canGroupSenders() }
+            val snippets = HashMap<String, String>()
+            try {
+                (conversationsDB.getNonArchived() + conversationsDB.getAllArchived()).forEach { conversation ->
+                    snippets[conversation.phoneNumber.uppercase()] = conversation.snippet
+                }
+            } catch (_: Exception) {
+            }
+
+            val senders = getShortCodeSenderAddresses()
+                .map { address ->
+                    ShortCodeSender(
+                        address = address,
+                        snippet = snippets[address.uppercase()].orEmpty()
+                    )
+                }
                 .sortedWith(
-                    compareBy<Conversation> {
-                        it.phoneNumber.similarShortCodeKey() ?: it.phoneNumber.uppercase()
-                    }.thenBy { it.phoneNumber.uppercase() }
+                    compareBy<ShortCodeSender> {
+                        it.address.similarShortCodeKey() ?: it.address.uppercase()
+                    }.thenBy { it.address.uppercase() }
                 )
+
             val titles = HashMap<String, String>()
             config.senderGroups.forEach { group ->
                 group.addresses.forEach { address ->
@@ -95,18 +108,18 @@ class SenderPickerActivity : SimpleActivity() {
             val suggestSimilar = intent.getBooleanExtra(SUGGEST_SIMILAR_SENDERS, false)
             if (suggestSimilar) {
                 val seed = selectedAddresses.firstOrNull()
-                    ?: conversations.firstOrNull()?.phoneNumber?.uppercase()
+                    ?: senders.firstOrNull()?.address?.uppercase()
                 val key = seed?.similarShortCodeKey()
                 if (key != null) {
-                    conversations
-                        .filter { it.phoneNumber.similarShortCodeKey() == key }
-                        .forEach { selectedAddresses.add(it.phoneNumber.uppercase()) }
+                    senders
+                        .filter { it.address.similarShortCodeKey() == key }
+                        .forEach { selectedAddresses.add(it.address.uppercase()) }
                 }
             }
 
             runOnUiThread {
                 binding.senderPickerProgress.hide()
-                allSenders = ArrayList(conversations)
+                allSenders = ArrayList(senders)
                 groupTitles = titles
                 if (suggestSimilar && selectedAddresses.size < 2) {
                     toast(R.string.no_similar_senders)
@@ -136,10 +149,9 @@ class SenderPickerActivity : SimpleActivity() {
             val needle = query.uppercase()
             ArrayList(
                 allSenders.filter {
-                    it.phoneNumber.uppercase().contains(needle) ||
-                        it.title.uppercase().contains(needle) ||
+                    it.address.uppercase().contains(needle) ||
                         it.snippet.uppercase().contains(needle) ||
-                        groupTitles[it.phoneNumber.uppercase()].orEmpty().uppercase().contains(needle)
+                        groupTitles[it.address.uppercase()].orEmpty().uppercase().contains(needle)
                 }
             )
         }
@@ -163,7 +175,7 @@ class SenderPickerActivity : SimpleActivity() {
     private fun confirmSelection() {
         hideKeyboard()
         val selectedSenders = allSenders.filter {
-            selectedAddresses.contains(it.phoneNumber.uppercase())
+            selectedAddresses.contains(it.address.uppercase())
         }
         if (selectedSenders.size < 2) {
             toast(R.string.select_at_least_two_senders)
@@ -171,19 +183,19 @@ class SenderPickerActivity : SimpleActivity() {
         }
 
         val overlappingGroups = selectedSenders.mapNotNull {
-            config.findSenderGroupByAddress(it.phoneNumber)
+            config.findSenderGroupByAddress(it.address)
         }.distinctBy { it.id }
-        val similarKey = selectedSenders.first().phoneNumber.similarShortCodeKey()
+        val similarKey = selectedSenders.first().address.similarShortCodeKey()
         val prefilledName = overlappingGroups.singleOrNull()?.title
             ?: similarKey
-            ?: selectedSenders.maxByOrNull { it.date }?.title.orEmpty()
+            ?: selectedSenders.first().address
 
         GroupSendersDialog(this, prefilledName) { name ->
-            requestTelephonySyncProgress()
+            binding.senderPickerProgress.show()
             ensureBackgroundThread {
-                saveSenderGroupFromSelection(selectedSenders, name)
+                saveSenderGroupFromSelection(selectedSenders.map { it.address }, name)
                 runOnUiThread {
-                    refreshConversations()
+                    refreshConversations(cacheOnly = true)
                     finish()
                 }
             }

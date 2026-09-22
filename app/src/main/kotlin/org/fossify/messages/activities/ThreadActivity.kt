@@ -1354,11 +1354,10 @@ class ThreadActivity : SimpleActivity() {
     private fun askConfirmUngroupSenders() {
         val currentConversation = conversation ?: return
         ConfirmationDialog(this, getString(R.string.ungroup_senders_confirmation)) {
-            requestTelephonySyncProgress()
             ensureBackgroundThread {
                 removeSenderGroupsForConversations(listOf(currentConversation))
                 runOnUiThread {
-                    refreshConversations()
+                    refreshConversations(cacheOnly = true)
                     finish()
                 }
             }

@@ -2,5 +2,5 @@ package org.fossify.messages.models
 
 class Events {
     class RefreshMessages
-    class RefreshConversations
+    class RefreshConversations(val cacheOnly: Boolean = false)
 }

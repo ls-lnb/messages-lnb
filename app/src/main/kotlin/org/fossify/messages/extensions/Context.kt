@@ -492,34 +492,85 @@ fun Context.getRelatedGroupedThreadIds(threadId: Long): List<Long> {
         return SenderGrouping.relatedThreadIds(threadId)
     }
 
-    val phoneNumbers = getThreadPhoneNumbers(getThreadRecipientIds(threadId))
-    if (phoneNumbers.size != 1) {
-        return listOf(threadId)
-    }
-    val group = config.findSenderGroupByAddress(phoneNumbers.first()) ?: return listOf(threadId)
-    val groupAddresses = group.addresses.map { it.uppercase() }.toSet()
+    val group = config.findSenderGroupByThreadId(threadId) ?: run {
+        val phoneNumbers = getThreadPhoneNumbers(getThreadRecipientIds(threadId))
+        if (phoneNumbers.size != 1) {
+            return listOf(threadId)
+        }
+        config.findSenderGroupByAddress(phoneNumbers.first())
+    } ?: return listOf(threadId)
 
-    val relatedIds = ArrayList<Long>()
-    val uri = "${Threads.CONTENT_URI}?simple=true".toUri()
-    val projection = arrayOf(Threads._ID, Threads.RECIPIENT_IDS)
-    val selection = "${Threads.MESSAGE_COUNT} > 0"
+    val ids = (group.threadIds + getThreadIdsForAddresses(group.addresses) + threadId)
+        .distinct()
+    SenderGrouping.mergeGroup(ids)
+    return ids
+}
+
+fun Context.getThreadIdsForAddresses(addresses: Collection<String>): List<Long> {
+    val variants = addresses
+        .flatMap { address ->
+            val trimmed = address.trim()
+            listOf(trimmed, trimmed.uppercase(), trimmed.lowercase())
+        }
+        .filter { it.isNotEmpty() }
+        .distinct()
+    if (variants.isEmpty()) {
+        return emptyList()
+    }
+
+    val ids = LinkedHashSet<Long>()
+    variants.chunked(50).forEach { chunk ->
+        val placeholders = chunk.joinToString(",") { "?" }
+        queryCursor(
+            uri = Sms.CONTENT_URI,
+            projection = arrayOf(Sms.THREAD_ID),
+            selection = "${Sms.ADDRESS} IN ($placeholders)",
+            selectionArgs = chunk.toTypedArray(),
+            showErrors = false
+        ) { cursor ->
+            ids.add(cursor.getLongValue(Sms.THREAD_ID))
+        }
+    }
+    return ids.toList()
+}
+
+fun Context.getShortCodeSenderAddresses(): List<String> {
+    val addresses = LinkedHashSet<String>()
+    val uri = Uri.withAppendedPath(MmsSms.CONTENT_URI, "canonical-addresses")
     try {
-        queryCursor(uri, projection, selection, showErrors = false) { cursor ->
-            val id = cursor.getLongValue(Threads._ID)
-            val rawIds = cursor.getStringValue(Threads.RECIPIENT_IDS)
-            val recipientIds = rawIds.split(" ").filter { it.areDigitsOnly() }.map { it.toInt() }
-            val numbers = getThreadPhoneNumbers(recipientIds)
-            if (numbers.size == 1 && numbers.first().uppercase() in groupAddresses) {
-                relatedIds.add(id)
+        queryCursor(uri, arrayOf(Mms.Addr.ADDRESS), showErrors = false) { cursor ->
+            val address = cursor.getStringValue(Mms.Addr.ADDRESS)?.trim().orEmpty()
+            if (address.isNotEmpty() && isShortCodeWithLetters(address)) {
+                addresses.add(address)
             }
         }
     } catch (_: Exception) {
-        return listOf(threadId)
     }
 
-    val ids = relatedIds.ifEmpty { arrayListOf(threadId) }
-    SenderGrouping.updateGroups(listOf(ids))
-    return ids
+    if (addresses.isNotEmpty()) {
+        return addresses.toList()
+    }
+
+    queryCursor(
+        uri = Sms.CONTENT_URI,
+        projection = arrayOf(Sms.ADDRESS),
+        showErrors = false
+    ) { cursor ->
+        val address = cursor.getStringValue(Sms.ADDRESS)?.trim().orEmpty()
+        if (address.isNotEmpty() && isShortCodeWithLetters(address)) {
+            addresses.add(address)
+        }
+    }
+    return addresses.toList()
+}
+
+fun Context.getGroupedConversationsFromCache(): ArrayList<Conversation> {
+    val cached = ArrayList<Conversation>()
+    try {
+        cached.addAll(conversationsDB.getNonArchived())
+    } catch (_: Exception) {
+    }
+    return groupUserSenderConversations(cached, replaceCache = true)
 }
 
 private fun Context.groupUserSenderConversations(
@@ -535,10 +586,14 @@ private fun Context.groupUserSenderConversations(
     }
 
     val addressToGroupId = HashMap<String, String>()
+    val threadIdToGroupId = HashMap<Long, String>()
     val groupsById = senderGroups.associateBy { it.id }
     for (group in senderGroups) {
         for (address in group.addresses) {
             addressToGroupId[address.uppercase()] = group.id
+        }
+        for (id in group.threadIds) {
+            threadIdToGroupId[id] = group.id
         }
     }
 
@@ -549,7 +604,8 @@ private fun Context.groupUserSenderConversations(
 
     for (conversation in conversations) {
         val groupId = if (!conversation.isGroupConversation) {
-            addressToGroupId[conversation.phoneNumber.uppercase()]
+            addressToGroupId[conversation.phoneNumber.trim().uppercase()]
+                ?: threadIdToGroupId[conversation.threadId]
         } else {
             null
         }
@@ -569,12 +625,15 @@ private fun Context.groupUserSenderConversations(
                 usesCustomTitle = true
             )
         } else {
-            grouped[groupId] = existing.copy(
+            val newest = if (conversation.date >= existing.date) conversation else existing
+            grouped[groupId] = newest.copy(
                 read = existing.read && conversation.read,
                 unreadCount = existing.unreadCount + conversation.unreadCount,
                 isArchived = existing.isArchived && conversation.isArchived,
                 title = senderGroup.title,
-                usesCustomTitle = true
+                usesCustomTitle = true,
+                snippet = if (conversation.date >= existing.date) conversation.snippet else existing.snippet,
+                date = maxOf(existing.date, conversation.date),
             )
         }
     }
@@ -615,12 +674,16 @@ fun Context.createOrMergeSenderGroup(conversations: List<Conversation>, title: S
 }
 
 fun Context.saveSenderGroupFromSelection(conversations: List<Conversation>, title: String) {
-    val selectedAddresses = conversations.map { it.phoneNumber.uppercase() }.distinct()
+    saveSenderGroupFromSelection(conversations.map { it.phoneNumber }, title)
+}
+
+fun Context.saveSenderGroupFromSelection(addresses: Collection<String>, title: String) {
+    val selectedAddresses = addresses.map { it.trim() }.filter { it.isNotEmpty() }.distinctBy { it.uppercase() }
     if (selectedAddresses.size < 2) {
         return
     }
 
-    val selectedSet = selectedAddresses.toSet()
+    val selectedSet = selectedAddresses.map { it.uppercase() }.toSet()
     val existing = config.senderGroups
     val keepId = existing.firstOrNull { group ->
         group.addresses.any { it.uppercase() in selectedSet }
@@ -635,12 +698,25 @@ fun Context.saveSenderGroupFromSelection(conversations: List<Conversation>, titl
         }
     }
 
+    val threadIds = LinkedHashSet<Long>()
+    threadIds.addAll(getThreadIdsForAddresses(selectedAddresses))
+    try {
+        (conversationsDB.getNonArchived() + conversationsDB.getAllArchived()).forEach { conversation ->
+            if (conversation.phoneNumber.uppercase() in selectedSet) {
+                threadIds.add(conversation.threadId)
+            }
+        }
+    } catch (_: Exception) {
+    }
+
     config.senderGroups = rewritten + SenderGroup(
         id = keepId,
         title = title,
-        addresses = selectedAddresses
+        addresses = selectedAddresses,
+        threadIds = threadIds.toList()
     )
-    SenderGrouping.updateGroups(emptyList())
+    SenderGrouping.mergeGroup(threadIds.toList())
+    SenderGrouping.pendingUiRefresh = true
 }
 
 fun Context.removeSenderGroupsForConversations(conversations: List<Conversation>) {
@@ -652,6 +728,7 @@ fun Context.removeSenderGroupsForConversations(conversations: List<Conversation>
     }
     config.senderGroups = config.senderGroups.filter { it.id !in groupIds }
     SenderGrouping.updateGroups(emptyList())
+    SenderGrouping.pendingUiRefresh = true
 }
 
 private fun Context.queryCursorUnsafe(

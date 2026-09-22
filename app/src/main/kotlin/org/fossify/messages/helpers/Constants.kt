@@ -109,8 +109,8 @@ fun refreshMessages() {
     EventBus.getDefault().post(Events.RefreshMessages())
 }
 
-fun refreshConversations() {
-    EventBus.getDefault().post(Events.RefreshConversations())
+fun refreshConversations(cacheOnly: Boolean = false) {
+    EventBus.getDefault().post(Events.RefreshConversations(cacheOnly))
 }
 
 @Volatile

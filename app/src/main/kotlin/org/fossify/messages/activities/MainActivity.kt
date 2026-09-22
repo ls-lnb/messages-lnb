@@ -60,10 +60,12 @@ import org.fossify.messages.extensions.clearExpiredScheduledMessages
 import org.fossify.messages.extensions.config
 import org.fossify.messages.extensions.conversationsDB
 import org.fossify.messages.extensions.getConversations
+import org.fossify.messages.extensions.getGroupedConversationsFromCache
 import org.fossify.messages.extensions.getMessages
 import org.fossify.messages.extensions.insertOrUpdateConversation
 import org.fossify.messages.extensions.messagesDB
 import org.fossify.messages.helpers.SEARCHED_MESSAGE_ID
+import org.fossify.messages.helpers.SenderGrouping
 import org.fossify.messages.helpers.THREAD_ID
 import org.fossify.messages.helpers.THREAD_TITLE
 import org.fossify.messages.helpers.consumeTelephonySyncProgressRequest
@@ -117,6 +119,9 @@ class MainActivity : SimpleActivity() {
         super.onResume()
         updateMenuColors()
         refreshMenuItems()
+        if (SenderGrouping.pendingUiRefresh) {
+            reloadGroupedConversationsFromCache()
+        }
 
         getOrCreateConversationsAdapter().apply {
             if (storedTextColor != getProperTextColor()) {
@@ -307,12 +312,13 @@ class MainActivity : SimpleActivity() {
                 listOf()
             }
 
-            val showProgress = shouldShowTelephonySyncProgress(conversations.isEmpty())
+            val groupedConversations = getGroupedConversationsFromCache()
+            val showProgress = shouldShowTelephonySyncProgress(groupedConversations.isEmpty())
             runOnUiThread {
                 if (showProgress) {
-                    showOrHideProgress(show = true, listEmpty = conversations.isEmpty())
+                    showOrHideProgress(show = true, listEmpty = groupedConversations.isEmpty())
                 }
-                setupConversations(conversations, cached = true, keepProgress = showProgress)
+                setupConversations(groupedConversations, cached = true, keepProgress = showProgress)
                 getNewConversations(
                     (conversations + archived).toMutableList() as ArrayList<Conversation>
                 )
@@ -342,7 +348,8 @@ class MainActivity : SimpleActivity() {
 
                 val isTemporaryThread = cachedConversation.isScheduled
                 val isConversationDeleted = !conversations.map { it.threadId }.contains(threadId)
-                if (isConversationDeleted && !isTemporaryThread) {
+                val isGroupedSender = config.findSenderGroupByAddress(cachedConversation.phoneNumber) != null
+                if (isConversationDeleted && !isTemporaryThread && !isGroupedSender) {
                     conversationsDB.deleteThreadId(threadId)
                 }
 
@@ -375,7 +382,7 @@ class MainActivity : SimpleActivity() {
                 }
             }
 
-            val allConversations = conversationsDB.getNonArchived() as ArrayList<Conversation>
+            val allConversations = getGroupedConversationsFromCache()
             runOnUiThread {
                 setupConversations(allConversations)
                 markTelephonySyncFinished()
@@ -730,8 +737,23 @@ class MainActivity : SimpleActivity() {
     }
 
     @Subscribe(threadMode = ThreadMode.MAIN)
-    fun refreshConversations(@Suppress("unused") event: Events.RefreshConversations) {
-        initMessenger()
+    fun refreshConversations(event: Events.RefreshConversations) {
+        if (event.cacheOnly) {
+            reloadGroupedConversationsFromCache()
+        } else {
+            initMessenger()
+        }
+    }
+
+    private fun reloadGroupedConversationsFromCache() {
+        SenderGrouping.pendingUiRefresh = false
+        ensureBackgroundThread {
+            val conversations = getGroupedConversationsFromCache()
+            runOnUiThread {
+                setupConversations(conversations)
+                showOrHideProgress(false)
+            }
+        }
     }
 
     private fun checkWhatsNewDialog() {

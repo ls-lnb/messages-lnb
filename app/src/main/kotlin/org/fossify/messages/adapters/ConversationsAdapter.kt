@@ -264,7 +264,10 @@ class ConversationsAdapter(
             showGroupingProgress()
             ensureBackgroundThread {
                 activity.removeSenderGroupsForConversations(getSelectedItems())
-                refreshConversationsAndFinishActMode()
+                activity.runOnUiThread {
+                    refreshConversations(cacheOnly = true)
+                    finishActMode()
+                }
             }
         }
     }
