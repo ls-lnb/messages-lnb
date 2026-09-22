@@ -60,12 +60,15 @@ import org.fossify.messages.extensions.clearExpiredScheduledMessages
 import org.fossify.messages.extensions.config
 import org.fossify.messages.extensions.conversationsDB
 import org.fossify.messages.extensions.getConversations
+import org.fossify.messages.extensions.getGroupedConversationsFromCache
 import org.fossify.messages.extensions.getMessages
 import org.fossify.messages.extensions.insertOrUpdateConversation
 import org.fossify.messages.extensions.messagesDB
 import org.fossify.messages.helpers.SEARCHED_MESSAGE_ID
+import org.fossify.messages.helpers.SenderGrouping
 import org.fossify.messages.helpers.THREAD_ID
 import org.fossify.messages.helpers.THREAD_TITLE
+import org.fossify.messages.helpers.consumeTelephonySyncProgressRequest
 import org.fossify.messages.models.Conversation
 import org.fossify.messages.models.Events
 import org.fossify.messages.models.Message
@@ -83,6 +86,7 @@ class MainActivity : SimpleActivity() {
     private var storedFontSize = 0
     private var lastSearchedText = ""
     private var bus: EventBus? = null
+    private var isShowingSyncProgress = false
 
     private val binding by viewBinding(ActivityMainBinding::inflate)
 
@@ -94,7 +98,12 @@ class MainActivity : SimpleActivity() {
         setupOptionsMenu()
         refreshMenuItems()
 
-        setupEdgeToEdge(padBottomImeAndSystem = listOf(binding.conversationsList))
+        setupEdgeToEdge(
+            padBottomImeAndSystem = listOf(
+                binding.conversationsList,
+                binding.conversationsProgressBar
+            )
+        )
 
         checkAndDeleteOldRecycleBinMessages()
         clearAllMessagesIfNeeded {
@@ -110,6 +119,15 @@ class MainActivity : SimpleActivity() {
         super.onResume()
         updateMenuColors()
         refreshMenuItems()
+        if (SenderGrouping.pendingRestoreUiRefresh) {
+            SenderGrouping.pendingRestoreUiRefresh = false
+            SenderGrouping.pendingUiRefresh = false
+            // settings were restored from a backup; reload everything so the bottom sync
+            // bar shows while conversations are regrouped
+            initMessenger()
+        } else if (SenderGrouping.pendingUiRefresh) {
+            reloadGroupedConversationsFromCache()
+        }
 
         getOrCreateConversationsAdapter().apply {
             if (storedTextColor != getProperTextColor()) {
@@ -300,8 +318,13 @@ class MainActivity : SimpleActivity() {
                 listOf()
             }
 
+            val groupedConversations = getGroupedConversationsFromCache()
+            val showProgress = shouldShowTelephonySyncProgress(groupedConversations.isEmpty())
             runOnUiThread {
-                setupConversations(conversations, cached = true)
+                if (showProgress) {
+                    showOrHideProgress(show = true, listEmpty = groupedConversations.isEmpty())
+                }
+                setupConversations(groupedConversations, cached = true, keepProgress = showProgress)
                 getNewConversations(
                     (conversations + archived).toMutableList() as ArrayList<Conversation>
                 )
@@ -331,7 +354,8 @@ class MainActivity : SimpleActivity() {
 
                 val isTemporaryThread = cachedConversation.isScheduled
                 val isConversationDeleted = !conversations.map { it.threadId }.contains(threadId)
-                if (isConversationDeleted && !isTemporaryThread) {
+                val isGroupedSender = config.findSenderGroupByAddress(cachedConversation.phoneNumber) != null
+                if (isConversationDeleted && !isTemporaryThread && !isGroupedSender) {
                     conversationsDB.deleteThreadId(threadId)
                 }
 
@@ -364,9 +388,10 @@ class MainActivity : SimpleActivity() {
                 }
             }
 
-            val allConversations = conversationsDB.getNonArchived() as ArrayList<Conversation>
+            val allConversations = getGroupedConversationsFromCache()
             runOnUiThread {
                 setupConversations(allConversations)
+                markTelephonySyncFinished()
             }
 
             if (config.appRunCount == 1) {
@@ -402,6 +427,7 @@ class MainActivity : SimpleActivity() {
     private fun setupConversations(
         conversations: ArrayList<Conversation>,
         cached: Boolean = false,
+        keepProgress: Boolean = false,
     ) {
         val sortedConversations = conversations
             .sortedWith(
@@ -410,10 +436,10 @@ class MainActivity : SimpleActivity() {
                 }.thenByDescending { it.date }
             ).toMutableList() as ArrayList<Conversation>
 
-        if (cached && config.appRunCount == 1) {
-            // there are no cached conversations on the first run so we show the
-            // loading placeholder and progress until we are done loading from telephony
-            showOrHideProgress(conversations.isEmpty())
+        if (cached && keepProgress) {
+            if (conversations.isEmpty()) {
+                showOrHideProgress(show = true, listEmpty = true)
+            }
         } else {
             showOrHideProgress(false)
             showOrHidePlaceholder(conversations.isEmpty())
@@ -431,14 +457,58 @@ class MainActivity : SimpleActivity() {
         }
     }
 
-    private fun showOrHideProgress(show: Boolean) {
+    private fun showOrHideProgress(show: Boolean, listEmpty: Boolean = false) {
+        isShowingSyncProgress = show
         if (show) {
             binding.conversationsProgressBar.show()
-            binding.noConversationsPlaceholder.beVisible()
-            binding.noConversationsPlaceholder.text = getString(R.string.loading_messages)
+            if (listEmpty) {
+                binding.noConversationsPlaceholder.beVisible()
+                binding.noConversationsPlaceholder.text = getString(R.string.loading_messages)
+            }
         } else {
             binding.conversationsProgressBar.hide()
-            binding.noConversationsPlaceholder.beGone()
+            if (binding.noConversationsPlaceholder.text == getString(R.string.loading_messages)) {
+                binding.noConversationsPlaceholder.beGone()
+            }
+        }
+    }
+
+    fun showTelephonySyncProgress() {
+        showOrHideProgress(show = true, listEmpty = false)
+    }
+
+    private fun shouldShowTelephonySyncProgress(cachedIsEmpty: Boolean): Boolean {
+        val requested = consumeTelephonySyncProgressRequest()
+        if (cachedIsEmpty || requested) {
+            return true
+        }
+
+        val becameDefault = isDefaultSmsApp() && !config.wasDefaultSmsApp
+        val appUpdated = getAppLastUpdateTime() != config.lastAppUpdateTime
+        return becameDefault || appUpdated
+    }
+
+    private fun markTelephonySyncFinished() {
+        config.wasDefaultSmsApp = isDefaultSmsApp()
+        config.lastAppUpdateTime = getAppLastUpdateTime()
+        if (isShowingSyncProgress) {
+            showOrHideProgress(false)
+        }
+    }
+
+    private fun isDefaultSmsApp(): Boolean {
+        return if (isQPlus()) {
+            getSystemService(RoleManager::class.java)?.isRoleHeld(RoleManager.ROLE_SMS) == true
+        } else {
+            Telephony.Sms.getDefaultSmsPackage(this) == packageName
+        }
+    }
+
+    private fun getAppLastUpdateTime(): Long {
+        return try {
+            packageManager.getPackageInfo(packageName, 0).lastUpdateTime
+        } catch (_: Exception) {
+            0L
         }
     }
 
@@ -673,8 +743,23 @@ class MainActivity : SimpleActivity() {
     }
 
     @Subscribe(threadMode = ThreadMode.MAIN)
-    fun refreshConversations(@Suppress("unused") event: Events.RefreshConversations) {
-        initMessenger()
+    fun refreshConversations(event: Events.RefreshConversations) {
+        if (event.cacheOnly) {
+            reloadGroupedConversationsFromCache()
+        } else {
+            initMessenger()
+        }
+    }
+
+    private fun reloadGroupedConversationsFromCache() {
+        SenderGrouping.pendingUiRefresh = false
+        ensureBackgroundThread {
+            val conversations = getGroupedConversationsFromCache()
+            runOnUiThread {
+                setupConversations(conversations)
+                showOrHideProgress(false)
+            }
+        }
     }
 
     private fun checkWhatsNewDialog() {

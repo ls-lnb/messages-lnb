@@ -60,6 +60,16 @@
         android:title="@string/copy_number_to_clipboard"
         app:showAsAction="never" />
     <item
+        android:id="@+id/cab_group_senders"
+        android:showAsAction="never"
+        android:title="@string/group_senders"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/cab_ungroup_senders"
+        android:showAsAction="never"
+        android:title="@string/ungroup_senders"
+        app:showAsAction="never" />
+    <item
         android:id="@+id/cab_rename_conversation"
         android:showAsAction="never"
         android:title="@string/rename_conversation"

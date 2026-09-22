@@ -44,12 +44,14 @@ abstract class BaseConversationsAdapter(
     RecyclerViewFastScroller.OnPopupTextUpdate {
     private var fontSize = activity.getTextSize()
     private var drafts = HashMap<Long, String>()
+    private var groupedSenderAddresses = emptySet<String>()
 
     private var recyclerViewState: Parcelable? = null
 
     init {
         setupDragListener(true)
         setHasStableIds(true)
+        refreshGroupedSenderAddresses()
         updateDrafts()
 
         registerAdapterDataObserver(object : RecyclerView.AdapterDataObserver() {
@@ -73,6 +75,7 @@ abstract class BaseConversationsAdapter(
         commitCallback: (() -> Unit)? = null,
     ) {
         saveRecyclerViewState()
+        refreshGroupedSenderAddresses()
         submitList(newConversations.toList(), commitCallback)
     }
 
@@ -133,6 +136,13 @@ abstract class BaseConversationsAdapter(
         }
     }
 
+    private fun refreshGroupedSenderAddresses() {
+        groupedSenderAddresses = activity.config.senderGroups
+            .flatMap { it.addresses }
+            .map { it.uppercase() }
+            .toSet()
+    }
+
     private fun fetchDrafts(drafts: HashMap<Long, String>) {
         drafts.clear()
         for ((threadId, draft) in activity.getAllDrafts()) {
@@ -151,6 +161,11 @@ abstract class BaseConversationsAdapter(
                 activity.config.pinnedConversations.contains(conversation.threadId.toString())
             )
             pinIndicator.applyColorFilter(textColor)
+
+            senderGroupIndicator.beVisibleIf(
+                groupedSenderAddresses.contains(conversation.phoneNumber.uppercase())
+            )
+            senderGroupIndicator.applyColorFilter(textColor)
 
             conversationFrame.isSelected = selectedKeys.contains(conversation.hashCode())
 

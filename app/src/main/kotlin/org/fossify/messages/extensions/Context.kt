@@ -54,6 +54,7 @@ import org.fossify.messages.databases.MessagesDatabase
 import org.fossify.messages.helpers.AttachmentUtils.parseAttachmentNames
 import org.fossify.messages.helpers.Config
 import org.fossify.messages.helpers.FILE_SIZE_NONE
+import org.fossify.messages.helpers.SenderGrouping
 import org.fossify.messages.helpers.MAX_MESSAGE_LENGTH
 import org.fossify.messages.helpers.MESSAGES_LIMIT
 import org.fossify.messages.helpers.MessagingCache
@@ -76,6 +77,9 @@ import org.fossify.messages.models.Message
 import org.fossify.messages.models.MessageAttachment
 import org.fossify.messages.models.NamePhoto
 import org.fossify.messages.models.RecycleBinMessage
+import org.fossify.messages.models.SenderGroup
+import org.fossify.messages.messaging.isShortCodeWithLetters
+import java.util.UUID
 import org.xmlpull.v1.XmlPullParserException
 import java.io.FileNotFoundException
 import kotlin.time.Duration.Companion.minutes
@@ -130,9 +134,11 @@ fun Context.getMessages(
         Sms.STATUS
     )
 
+    val relatedThreadIds = getRelatedGroupedThreadIds(threadId)
     val rangeQuery = if (dateFrom == -1) "" else "AND ${Sms.DATE} < ${dateFrom.toLong() * 1000}"
-    val selection = "${Sms.THREAD_ID} = ? $rangeQuery"
-    val selectionArgs = arrayOf(threadId.toString())
+    val (threadFilter, threadFilterArgs) = sqlThreadIdFilter(relatedThreadIds)
+    val selection = "$threadFilter $rangeQuery"
+    val selectionArgs = threadFilterArgs
     val sortOrder = "${Sms.DATE} DESC LIMIT $limit"
 
     val blockStatus = HashMap<String, Boolean>()
@@ -194,12 +200,13 @@ fun Context.getMessages(
         messages.add(message)
     }
 
-    messages.addAll(getMMS(threadId, sortOrder, dateFrom))
+    messages.addAll(getMMS(threadId = null, sortOrder = sortOrder, dateFrom = dateFrom, threadIds = relatedThreadIds))
 
     if (includeScheduledMessages) {
         try {
-            val scheduledMessages = messagesDB.getScheduledThreadMessages(threadId)
-            messages.addAll(scheduledMessages)
+            relatedThreadIds.forEach { id ->
+                messages.addAll(messagesDB.getScheduledThreadMessages(id))
+            }
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -221,6 +228,7 @@ fun Context.getMMS(
     sortOrder: String? = null,
     dateFrom: Int = -1,
     uri: Uri = Mms.CONTENT_URI,
+    threadIds: Collection<Long>? = null,
 ): ArrayList<Message> {
     val projection = arrayOf(
         Mms._ID,
@@ -234,16 +242,19 @@ fun Context.getMMS(
 
     var selection: String? = null
     var selectionArgs: Array<String>? = null
+    val ids = threadIds ?: threadId?.let { listOf(it) }
 
-    if (threadId == null && dateFrom != -1) {
+    if (ids.isNullOrEmpty() && dateFrom != -1) {
         // Should not multiply 1000 here, because date in mms's database is different from sms's.
         selection = "${Sms.DATE} < ${dateFrom.toLong()}"
-    } else if (threadId != null && dateFrom == -1) {
-        selection = "${Sms.THREAD_ID} = ?"
-        selectionArgs = arrayOf(threadId.toString())
-    } else if (threadId != null) {
-        selection = "${Sms.THREAD_ID} = ? AND ${Sms.DATE} < ${dateFrom.toLong()}"
-        selectionArgs = arrayOf(threadId.toString())
+    } else if (!ids.isNullOrEmpty() && dateFrom == -1) {
+        val filter = sqlThreadIdFilter(ids)
+        selection = filter.first
+        selectionArgs = filter.second
+    } else if (!ids.isNullOrEmpty()) {
+        val filter = sqlThreadIdFilter(ids)
+        selection = "${filter.first} AND ${Sms.DATE} < ${dateFrom.toLong()}"
+        selectionArgs = filter.second
     }
 
     val messages = ArrayList<Message>()
@@ -351,6 +362,7 @@ fun Context.getUnreadCountsByThread(): Map<Long, Int> {
 fun Context.getConversations(
     threadId: Long? = null,
     privateContacts: ArrayList<SimpleContact> = ArrayList(),
+    applySenderGroups: Boolean = true,
 ): ArrayList<Conversation> {
     val archiveAvailable = config.isArchiveAvailable
 
@@ -449,7 +461,7 @@ fun Context.getConversations(
             && archiveAvailable
         ) {
             config.isArchiveAvailable = false
-            return getConversations(threadId, privateContacts)
+            return getConversations(threadId, privateContacts, applySenderGroups)
         } else {
             showErrorToast(sqliteException)
         }
@@ -458,7 +470,299 @@ fun Context.getConversations(
     }
 
     conversations.sortByDescending { it.date }
-    return conversations
+    if (!applySenderGroups) {
+        return conversations
+    }
+    return groupUserSenderConversations(
+        conversations = conversations,
+        replaceCache = threadId == null
+    )
+}
+
+private fun sqlThreadIdFilter(threadIds: Collection<Long>): Pair<String, Array<String>?> {
+    return if (threadIds.size == 1) {
+        "${Sms.THREAD_ID} = ?" to arrayOf(threadIds.first().toString())
+    } else {
+        "${Sms.THREAD_ID} IN (${threadIds.joinToString(",")})" to null
+    }
+}
+
+fun Context.getRelatedGroupedThreadIds(threadId: Long): List<Long> {
+    if (SenderGrouping.hasMapping(threadId)) {
+        return SenderGrouping.relatedThreadIds(threadId)
+    }
+
+    val group = config.findSenderGroupByThreadId(threadId) ?: run {
+        val phoneNumbers = getThreadPhoneNumbers(getThreadRecipientIds(threadId))
+        if (phoneNumbers.size != 1) {
+            return listOf(threadId)
+        }
+        config.findSenderGroupByAddress(phoneNumbers.first())
+    } ?: return listOf(threadId)
+
+    val ids = (group.threadIds + getThreadIdsForAddresses(group.addresses) + threadId)
+        .distinct()
+    SenderGrouping.mergeGroup(ids)
+    return ids
+}
+
+fun Context.getThreadIdsForAddresses(addresses: Collection<String>): List<Long> {
+    val variants = addresses
+        .flatMap { address ->
+            val trimmed = address.trim()
+            listOf(trimmed, trimmed.uppercase(), trimmed.lowercase())
+        }
+        .filter { it.isNotEmpty() }
+        .distinct()
+    if (variants.isEmpty()) {
+        return emptyList()
+    }
+
+    val ids = LinkedHashSet<Long>()
+    variants.chunked(50).forEach { chunk ->
+        val placeholders = chunk.joinToString(",") { "?" }
+        queryCursor(
+            uri = Sms.CONTENT_URI,
+            projection = arrayOf(Sms.THREAD_ID),
+            selection = "${Sms.ADDRESS} IN ($placeholders)",
+            selectionArgs = chunk.toTypedArray(),
+            showErrors = false
+        ) { cursor ->
+            ids.add(cursor.getLongValue(Sms.THREAD_ID))
+        }
+    }
+    return ids.toList()
+}
+
+fun Context.searchSmsIdsInThreads(threadIds: Collection<Long>, query: String): List<Long> {
+    val trimmed = query.trim()
+    if (threadIds.isEmpty() || trimmed.isEmpty()) {
+        return emptyList()
+    }
+
+    val ids = ArrayList<Long>()
+    val like = "%$trimmed%"
+    threadIds.distinct().chunked(50).forEach { chunk ->
+        val threadFilter = if (chunk.size == 1) {
+            "${Sms.THREAD_ID} = ?"
+        } else {
+            "${Sms.THREAD_ID} IN (${chunk.joinToString(",")})"
+        }
+        val selection = "$threadFilter AND ${Sms.BODY} LIKE ?"
+        val selectionArgs = if (chunk.size == 1) {
+            arrayOf(chunk.first().toString(), like)
+        } else {
+            arrayOf(like)
+        }
+        queryCursor(
+            uri = Sms.CONTENT_URI,
+            projection = arrayOf(Sms._ID),
+            selection = selection,
+            selectionArgs = selectionArgs,
+            sortOrder = "${Sms.DATE} ASC, ${Sms._ID} ASC",
+            showErrors = false
+        ) { cursor ->
+            ids.add(cursor.getLongValue(Sms._ID))
+        }
+    }
+    return ids.distinct()
+}
+
+fun Context.getShortCodeSenderAddresses(): List<String> {
+    val addresses = LinkedHashSet<String>()
+    val uri = Uri.withAppendedPath(MmsSms.CONTENT_URI, "canonical-addresses")
+    try {
+        queryCursor(uri, arrayOf(Mms.Addr.ADDRESS), showErrors = false) { cursor ->
+            val address = cursor.getStringValue(Mms.Addr.ADDRESS)?.trim().orEmpty()
+            if (address.isNotEmpty() && isShortCodeWithLetters(address)) {
+                addresses.add(address)
+            }
+        }
+    } catch (_: Exception) {
+    }
+
+    if (addresses.isNotEmpty()) {
+        return addresses.toList()
+    }
+
+    queryCursor(
+        uri = Sms.CONTENT_URI,
+        projection = arrayOf(Sms.ADDRESS),
+        showErrors = false
+    ) { cursor ->
+        val address = cursor.getStringValue(Sms.ADDRESS)?.trim().orEmpty()
+        if (address.isNotEmpty() && isShortCodeWithLetters(address)) {
+            addresses.add(address)
+        }
+    }
+    return addresses.toList()
+}
+
+fun Context.getGroupedConversationsFromCache(): ArrayList<Conversation> {
+    val cached = ArrayList<Conversation>()
+    try {
+        cached.addAll(conversationsDB.getNonArchived())
+    } catch (_: Exception) {
+    }
+    return groupUserSenderConversations(cached, replaceCache = true)
+}
+
+private fun Context.groupUserSenderConversations(
+    conversations: ArrayList<Conversation>,
+    replaceCache: Boolean,
+): ArrayList<Conversation> {
+    val senderGroups = config.senderGroups
+    if (senderGroups.isEmpty()) {
+        if (replaceCache) {
+            SenderGrouping.updateGroups(emptyList())
+        }
+        return conversations
+    }
+
+    val addressToGroupId = HashMap<String, String>()
+    val threadIdToGroupId = HashMap<Long, String>()
+    val groupsById = senderGroups.associateBy { it.id }
+    for (group in senderGroups) {
+        for (address in group.addresses) {
+            addressToGroupId[address.uppercase()] = group.id
+        }
+        for (id in group.threadIds) {
+            threadIdToGroupId[id] = group.id
+        }
+    }
+
+    val grouped = LinkedHashMap<String, Conversation>()
+    val groupThreadIds = LinkedHashMap<String, MutableList<Long>>()
+    val passthrough = ArrayList<Conversation>()
+    val passthroughIds = ArrayList<List<Long>>()
+
+    for (conversation in conversations) {
+        val groupId = if (!conversation.isGroupConversation) {
+            addressToGroupId[conversation.phoneNumber.trim().uppercase()]
+                ?: threadIdToGroupId[conversation.threadId]
+        } else {
+            null
+        }
+
+        if (groupId == null) {
+            passthrough.add(conversation)
+            passthroughIds.add(listOf(conversation.threadId))
+            continue
+        }
+
+        val senderGroup = groupsById.getValue(groupId)
+        groupThreadIds.getOrPut(groupId) { mutableListOf() }.add(conversation.threadId)
+        val existing = grouped[groupId]
+        if (existing == null) {
+            grouped[groupId] = conversation.copy(
+                title = senderGroup.title,
+                usesCustomTitle = true
+            )
+        } else {
+            val newest = if (conversation.date >= existing.date) conversation else existing
+            grouped[groupId] = newest.copy(
+                read = existing.read && conversation.read,
+                unreadCount = existing.unreadCount + conversation.unreadCount,
+                isArchived = existing.isArchived && conversation.isArchived,
+                title = senderGroup.title,
+                usesCustomTitle = true,
+                snippet = if (conversation.date >= existing.date) conversation.snippet else existing.snippet,
+                date = maxOf(existing.date, conversation.date),
+            )
+        }
+    }
+
+    if (replaceCache) {
+        SenderGrouping.updateGroups(groupThreadIds.values + passthroughIds)
+    }
+
+    val result = ArrayList<Conversation>(passthrough.size + grouped.size)
+    result.addAll(passthrough)
+    result.addAll(grouped.values)
+    result.sortByDescending { it.date }
+    return result
+}
+
+fun Conversation.canGroupSenders(): Boolean {
+    return !isGroupConversation && isShortCodeWithLetters(phoneNumber)
+}
+
+fun Context.createOrMergeSenderGroup(conversations: List<Conversation>, title: String) {
+    val selectedAddresses = conversations.map { it.phoneNumber.uppercase() }.toSet()
+    val existing = config.senderGroups
+    val addresses = LinkedHashSet<String>()
+    val groupsToRemove = HashSet<String>()
+
+    for (group in existing) {
+        if (group.addresses.any { it.uppercase() in selectedAddresses }) {
+            addresses.addAll(group.addresses.map { it.uppercase() })
+            groupsToRemove.add(group.id)
+        }
+    }
+    addresses.addAll(selectedAddresses)
+
+    val keepId = existing.firstOrNull { it.id in groupsToRemove }?.id ?: UUID.randomUUID().toString()
+    val newGroup = SenderGroup(id = keepId, title = title, addresses = addresses.toList())
+    config.senderGroups = existing.filter { it.id !in groupsToRemove } + newGroup
+    SenderGrouping.updateGroups(emptyList())
+}
+
+fun Context.saveSenderGroupFromSelection(conversations: List<Conversation>, title: String) {
+    saveSenderGroupFromSelection(conversations.map { it.phoneNumber }, title)
+}
+
+fun Context.saveSenderGroupFromSelection(addresses: Collection<String>, title: String) {
+    val selectedAddresses = addresses.map { it.trim() }.filter { it.isNotEmpty() }.distinctBy { it.uppercase() }
+    if (selectedAddresses.size < 2) {
+        return
+    }
+
+    val selectedSet = selectedAddresses.map { it.uppercase() }.toSet()
+    val existing = config.senderGroups
+    val keepId = existing.firstOrNull { group ->
+        group.addresses.any { it.uppercase() in selectedSet }
+    }?.id ?: UUID.randomUUID().toString()
+
+    val rewritten = existing.mapNotNull { group ->
+        if (group.id == keepId) {
+            null
+        } else {
+            val remaining = group.addresses.filter { it.uppercase() !in selectedSet }
+            if (remaining.size < 2) null else group.copy(addresses = remaining)
+        }
+    }
+
+    val threadIds = LinkedHashSet<Long>()
+    threadIds.addAll(getThreadIdsForAddresses(selectedAddresses))
+    try {
+        (conversationsDB.getNonArchived() + conversationsDB.getAllArchived()).forEach { conversation ->
+            if (conversation.phoneNumber.uppercase() in selectedSet) {
+                threadIds.add(conversation.threadId)
+            }
+        }
+    } catch (_: Exception) {
+    }
+
+    config.senderGroups = rewritten + SenderGroup(
+        id = keepId,
+        title = title,
+        addresses = selectedAddresses,
+        threadIds = threadIds.toList()
+    )
+    SenderGrouping.mergeGroup(threadIds.toList())
+    SenderGrouping.pendingUiRefresh = true
+}
+
+fun Context.removeSenderGroupsForConversations(conversations: List<Conversation>) {
+    val groupIds = conversations.mapNotNull {
+        config.findSenderGroupByAddress(it.phoneNumber)?.id
+    }.toSet()
+    if (groupIds.isEmpty()) {
+        return
+    }
+    config.senderGroups = config.senderGroups.filter { it.id !in groupIds }
+    SenderGrouping.updateGroups(emptyList())
+    SenderGrouping.pendingUiRefresh = true
 }
 
 private fun Context.queryCursorUnsafe(
@@ -863,32 +1167,35 @@ fun Context.removeAllArchivedConversations(callback: (() -> Unit)? = null) {
 }
 
 fun Context.deleteConversation(threadId: Long) {
-    var uri = Sms.CONTENT_URI
-    val selection = "${Sms.THREAD_ID} = ?"
-    val selectionArgs = arrayOf(threadId.toString())
-    try {
-        contentResolver.delete(uri, selection, selectionArgs)
-    } catch (e: Exception) {
-        showErrorToast(e)
-    }
+    val relatedThreadIds = getRelatedGroupedThreadIds(threadId)
+    relatedThreadIds.forEach { id ->
+        var uri = Sms.CONTENT_URI
+        val selection = "${Sms.THREAD_ID} = ?"
+        val selectionArgs = arrayOf(id.toString())
+        try {
+            contentResolver.delete(uri, selection, selectionArgs)
+        } catch (e: Exception) {
+            showErrorToast(e)
+        }
 
-    uri = Mms.CONTENT_URI
-    try {
-        contentResolver.delete(uri, selection, selectionArgs)
-    } catch (e: Exception) {
-        e.printStackTrace()
-    }
+        uri = Mms.CONTENT_URI
+        try {
+            contentResolver.delete(uri, selection, selectionArgs)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
 
-    conversationsDB.deleteThreadId(threadId)
-    messagesDB.deleteThreadMessages(threadId)
-    MessagingCache.participantsCache.remove(threadId)
+        conversationsDB.deleteThreadId(id)
+        messagesDB.deleteThreadMessages(id)
+        MessagingCache.participantsCache.remove(id)
 
-    if (config.customNotifications.contains(threadId.toString())) {
-        config.removeCustomNotificationsByThreadId(threadId)
-        notificationManager.deleteNotificationChannel(threadId.toString())
-    }
-    if(shortcutHelper.getShortcut(threadId) != null) {
-        shortcutHelper.removeShortcutForThread(threadId)
+        if (config.customNotifications.contains(id.toString())) {
+            config.removeCustomNotificationsByThreadId(id)
+            notificationManager.deleteNotificationChannel(id.toString())
+        }
+        if (shortcutHelper.getShortcut(id) != null) {
+            shortcutHelper.removeShortcutForThread(id)
+        }
     }
 }
 
@@ -947,29 +1254,32 @@ fun Context.restoreMessageFromRecycleBin(id: Long) {
 }
 
 fun Context.updateConversationArchivedStatus(threadId: Long, archived: Boolean) {
+    val relatedThreadIds = getRelatedGroupedThreadIds(threadId)
     val uri = Threads.CONTENT_URI
     val values = ContentValues().apply {
         put(Threads.ARCHIVED, archived)
     }
-    val selection = "${Threads._ID} = ?"
-    val selectionArgs = arrayOf(threadId.toString())
-    try {
-        contentResolver.update(uri, values, selection, selectionArgs)
-    } catch (sqliteException: SQLiteException) {
-        if (
-            sqliteException.message?.contains("no such column: archived") == true
-            && config.isArchiveAvailable
-        ) {
-            config.isArchiveAvailable = false
-            return
-        } else {
-            throw sqliteException
+    relatedThreadIds.forEach { id ->
+        val selection = "${Threads._ID} = ?"
+        val selectionArgs = arrayOf(id.toString())
+        try {
+            contentResolver.update(uri, values, selection, selectionArgs)
+        } catch (sqliteException: SQLiteException) {
+            if (
+                sqliteException.message?.contains("no such column: archived") == true
+                && config.isArchiveAvailable
+            ) {
+                config.isArchiveAvailable = false
+                return
+            } else {
+                throw sqliteException
+            }
         }
-    }
-    if (archived) {
-        conversationsDB.moveToArchive(threadId)
-    } else {
-        conversationsDB.unarchive(threadId)
+        if (archived) {
+            conversationsDB.moveToArchive(id)
+        } else {
+            conversationsDB.unarchive(id)
+        }
     }
 }
 
@@ -1006,39 +1316,45 @@ fun Context.markMessageRead(id: Long, isMMS: Boolean) {
 }
 
 fun Context.markThreadMessagesRead(threadId: Long) {
-    val id = threadId.toString()
+    val relatedThreadIds = getRelatedGroupedThreadIds(threadId)
+    relatedThreadIds.forEach { id ->
+        val idString = id.toString()
 
-    val smsValues = ContentValues().apply {
-        put(Sms.READ, 1)
-        put(Sms.SEEN, 1)
+        val smsValues = ContentValues().apply {
+            put(Sms.READ, 1)
+            put(Sms.SEEN, 1)
+        }
+        val smsSelection = "${Sms.THREAD_ID}=? AND ${Sms.TYPE}=? AND (${Sms.READ}=? OR ${Sms.SEEN}=?)"
+        val smsArgs = arrayOf(idString, Sms.MESSAGE_TYPE_INBOX.toString(), "0", "0")
+        contentResolver.update(Sms.CONTENT_URI, smsValues, smsSelection, smsArgs)
+
+        val mmsValues = ContentValues().apply {
+            put(Mms.READ, 1)
+            put(Mms.SEEN, 1)
+        }
+        val mmsSelection = "${Mms.THREAD_ID}=? AND ${Mms.MESSAGE_BOX}=? AND (${Mms.READ}=? OR ${Mms.SEEN}=?)"
+        val mmsArgs = arrayOf(idString, Mms.MESSAGE_BOX_INBOX.toString(), "0", "0")
+        contentResolver.update(Mms.CONTENT_URI, mmsValues, mmsSelection, mmsArgs)
+
+        messagesDB.markThreadRead(id)
+        conversationsDB.markRead(id)
     }
-    val smsSelection = "${Sms.THREAD_ID}=? AND ${Sms.TYPE}=? AND (${Sms.READ}=? OR ${Sms.SEEN}=?)"
-    val smsArgs = arrayOf(id, Sms.MESSAGE_TYPE_INBOX.toString(), "0", "0")
-    contentResolver.update(Sms.CONTENT_URI, smsValues, smsSelection, smsArgs)
-
-    val mmsValues = ContentValues().apply {
-        put(Mms.READ, 1)
-        put(Mms.SEEN, 1)
-    }
-    val mmsSelection = "${Mms.THREAD_ID}=? AND ${Mms.MESSAGE_BOX}=? AND (${Mms.READ}=? OR ${Mms.SEEN}=?)"
-    val mmsArgs = arrayOf(id, Mms.MESSAGE_BOX_INBOX.toString(), "0", "0")
-    contentResolver.update(Mms.CONTENT_URI, mmsValues, mmsSelection, mmsArgs)
-
-    messagesDB.markThreadRead(threadId)
-    conversationsDB.markRead(threadId)
 }
 
 fun Context.markThreadMessagesUnread(threadId: Long) {
-    arrayOf(Sms.CONTENT_URI, Mms.CONTENT_URI).forEach { uri ->
-        val contentValues = ContentValues().apply {
-            put(Sms.READ, 0)
-            put(Sms.SEEN, 0)
+    val relatedThreadIds = getRelatedGroupedThreadIds(threadId)
+    relatedThreadIds.forEach { id ->
+        arrayOf(Sms.CONTENT_URI, Mms.CONTENT_URI).forEach { uri ->
+            val contentValues = ContentValues().apply {
+                put(Sms.READ, 0)
+                put(Sms.SEEN, 0)
+            }
+            val selection = "${Sms.THREAD_ID} = ?"
+            val selectionArgs = arrayOf(id.toString())
+            contentResolver.update(uri, contentValues, selection, selectionArgs)
         }
-        val selection = "${Sms.THREAD_ID} = ?"
-        val selectionArgs = arrayOf(threadId.toString())
-        contentResolver.update(uri, contentValues, selection, selectionArgs)
+        conversationsDB.markUnread(id)
     }
-    conversationsDB.markUnread(threadId)
 } 
 
 @SuppressLint("NewApi")
@@ -1271,6 +1587,12 @@ fun Context.renameConversation(conversation: Conversation, newTitle: String): Co
     val updatedConv = conversation.copy(title = newTitle, usesCustomTitle = true)
     try {
         conversationsDB.insertOrUpdate(updatedConv)
+        val group = config.findSenderGroupByAddress(conversation.phoneNumber)
+        if (group != null) {
+            config.senderGroups = config.senderGroups.map {
+                if (it.id == group.id) it.copy(title = newTitle) else it
+            }
+        }
         ensureBackgroundThread {
             shortcutHelper.createOrUpdateShortcut(updatedConv)
         }

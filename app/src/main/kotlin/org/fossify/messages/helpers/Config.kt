@@ -4,9 +4,13 @@ import android.content.Context
 import org.fossify.commons.helpers.BaseConfig
 import org.fossify.messages.extensions.getDefaultKeyboardHeight
 import org.fossify.messages.models.Conversation
+import org.fossify.messages.models.SenderGroup
 
 class Config(context: Context) : BaseConfig(context) {
     companion object {
+        @Volatile
+        var memorySenderGroups: List<SenderGroup>? = null
+
         fun newInstance(context: Context) = Config(context)
     }
 
@@ -151,4 +155,31 @@ class Config(context: Context) : BaseConfig(context) {
         get() = prefs.getBoolean(KEEP_CONVERSATIONS_ARCHIVED, false)
         set(keepConversationsArchived) = prefs.edit()
             .putBoolean(KEEP_CONVERSATIONS_ARCHIVED, keepConversationsArchived).apply()
+
+    var senderGroups: List<SenderGroup>
+        get() = memorySenderGroups ?: SenderGroup.fromJson(prefs.getString(SENDER_GROUPS, "[]")!!).also {
+            memorySenderGroups = it
+        }
+        set(senderGroups) {
+            memorySenderGroups = senderGroups
+            prefs.edit().putString(SENDER_GROUPS, SenderGroup.toJson(senderGroups)).commit()
+        }
+
+    fun findSenderGroupByAddress(address: String): SenderGroup? {
+        return senderGroups.firstOrNull { it.containsAddress(address) }
+    }
+
+    fun findSenderGroupByThreadId(threadId: Long): SenderGroup? {
+        return senderGroups.firstOrNull { it.containsThreadId(threadId) }
+    }
+
+    var lastAppUpdateTime: Long
+        get() = prefs.getLong(LAST_APP_UPDATE_TIME, 0L)
+        set(lastAppUpdateTime) = prefs.edit()
+            .putLong(LAST_APP_UPDATE_TIME, lastAppUpdateTime).apply()
+
+    var wasDefaultSmsApp: Boolean
+        get() = prefs.getBoolean(WAS_DEFAULT_SMS_APP, false)
+        set(wasDefaultSmsApp) = prefs.edit()
+            .putBoolean(WAS_DEFAULT_SMS_APP, wasDefaultSmsApp).apply()
 }

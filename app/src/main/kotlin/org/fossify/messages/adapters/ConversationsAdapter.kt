@@ -15,17 +15,22 @@ import org.fossify.commons.helpers.KEY_PHONE
 import org.fossify.commons.helpers.ensureBackgroundThread
 import org.fossify.commons.views.MyRecyclerView
 import org.fossify.messages.R
+import org.fossify.messages.activities.MainActivity
 import org.fossify.messages.activities.SimpleActivity
 import org.fossify.messages.dialogs.RenameConversationDialog
+import org.fossify.messages.extensions.canGroupSenders
 import org.fossify.messages.extensions.config
 import org.fossify.messages.extensions.deleteConversation
 import org.fossify.messages.extensions.dialNumber
 import org.fossify.messages.extensions.launchConversationDetails
+import org.fossify.messages.extensions.launchSenderPicker
 import org.fossify.messages.extensions.markThreadMessagesRead
 import org.fossify.messages.extensions.markThreadMessagesUnread
+import org.fossify.messages.extensions.removeSenderGroupsForConversations
 import org.fossify.messages.extensions.renameConversation
 import org.fossify.messages.extensions.updateConversationArchivedStatus
 import org.fossify.messages.helpers.refreshConversations
+import org.fossify.messages.helpers.requestTelephonySyncProgress
 import org.fossify.messages.messaging.isShortCodeWithLetters
 import org.fossify.messages.models.Conversation
 
@@ -43,6 +48,10 @@ class ConversationsAdapter(
         val selectedConversation = selectedItems.firstOrNull() ?: return
         val isGroupConversation = selectedConversation.isGroupConversation
         val archiveAvailable = activity.config.isArchiveAvailable
+        val canGroupSelected = selectedItems.isNotEmpty() && selectedItems.all { it.canGroupSenders() }
+        val isSenderGroup = selectedItems.all {
+            activity.config.findSenderGroupByAddress(it.phoneNumber) != null
+        }
 
         menu.apply {
             findItem(R.id.cab_block_number).title =
@@ -53,8 +62,10 @@ class ConversationsAdapter(
                 isSingleSelection && !isGroupConversation &&
                         !isShortCodeWithLetters(selectedConversation.phoneNumber)
             findItem(R.id.cab_copy_number).isVisible = isSingleSelection && !isGroupConversation
+            findItem(R.id.cab_group_senders).isVisible = canGroupSelected
+            findItem(R.id.cab_ungroup_senders).isVisible = isSenderGroup
             findItem(R.id.cab_rename_conversation).isVisible =
-                isSingleSelection && isGroupConversation
+                isSingleSelection && (isGroupConversation || isSenderGroup)
             findItem(R.id.cab_conversation_details).isVisible = isSingleSelection
             findItem(R.id.cab_mark_as_read).isVisible = selectedItems.any { !it.read }
             findItem(R.id.cab_mark_as_unread).isVisible = selectedItems.any { it.read }
@@ -76,6 +87,8 @@ class ConversationsAdapter(
             R.id.cab_copy_number -> copyNumberToClipboard()
             R.id.cab_delete -> askConfirmDelete()
             R.id.cab_archive -> askConfirmArchive()
+            R.id.cab_group_senders -> groupSenders()
+            R.id.cab_ungroup_senders -> askConfirmUngroup()
             R.id.cab_rename_conversation -> renameConversation(selectedItems.first())
             R.id.cab_conversation_details ->
                 activity.launchConversationDetails(selectedItems.first().threadId)
@@ -230,6 +243,38 @@ class ConversationsAdapter(
                 }
             }
         }
+    }
+
+    private fun groupSenders() {
+        val selectedItems = getSelectedItems()
+        if (selectedItems.isEmpty()) {
+            return
+        }
+
+        val addresses = selectedItems.flatMap { conversation ->
+            activity.config.findSenderGroupByAddress(conversation.phoneNumber)?.addresses
+                ?: listOf(conversation.phoneNumber)
+        }.distinct()
+        activity.launchSenderPicker(addresses)
+        finishActMode()
+    }
+
+    private fun askConfirmUngroup() {
+        ConfirmationDialog(activity, activity.getString(R.string.ungroup_senders_confirmation)) {
+            showGroupingProgress()
+            ensureBackgroundThread {
+                activity.removeSenderGroupsForConversations(getSelectedItems())
+                activity.runOnUiThread {
+                    refreshConversations(cacheOnly = true)
+                    finishActMode()
+                }
+            }
+        }
+    }
+
+    private fun showGroupingProgress() {
+        requestTelephonySyncProgress()
+        (activity as? MainActivity)?.showTelephonySyncProgress()
     }
 
     private fun renameConversation(conversation: Conversation) {

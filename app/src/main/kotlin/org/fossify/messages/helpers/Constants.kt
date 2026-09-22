@@ -48,6 +48,11 @@ const val IS_ARCHIVE_AVAILABLE = "is_archive_available"
 const val CUSTOM_NOTIFICATIONS = "custom_notifications"
 const val IS_LAUNCHED_FROM_SHORTCUT = "is_launched_from_shortcut"
 const val KEEP_CONVERSATIONS_ARCHIVED = "keep_conversations_archived"
+const val SENDER_GROUPS = "sender_groups"
+const val PRESELECTED_SENDER_ADDRESSES = "preselected_sender_addresses"
+const val SUGGEST_SIMILAR_SENDERS = "suggest_similar_senders"
+const val LAST_APP_UPDATE_TIME = "last_app_update_time"
+const val WAS_DEFAULT_SMS_APP = "was_default_sms_app"
 
 private const val PATH = "org.fossify.org.fossify.messages.action."
 const val MARK_AS_READ = PATH + "mark_as_read"
@@ -104,8 +109,21 @@ fun refreshMessages() {
     EventBus.getDefault().post(Events.RefreshMessages())
 }
 
-fun refreshConversations() {
-    EventBus.getDefault().post(Events.RefreshConversations())
+fun refreshConversations(cacheOnly: Boolean = false) {
+    EventBus.getDefault().post(Events.RefreshConversations(cacheOnly))
+}
+
+@Volatile
+private var pendingTelephonySyncProgress = false
+
+fun requestTelephonySyncProgress() {
+    pendingTelephonySyncProgress = true
+}
+
+fun consumeTelephonySyncProgressRequest(): Boolean {
+    val requested = pendingTelephonySyncProgress
+    pendingTelephonySyncProgress = false
+    return requested
 }
 
 /** Not to be used with real messages persisted in the telephony db. This is for internal use only (e.g. scheduled messages, notification ids etc). */

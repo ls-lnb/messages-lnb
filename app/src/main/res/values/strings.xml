@@ -36,6 +36,26 @@
     <string name="conversation_details">Conversation details</string>
     <string name="rename_conversation">Rename conversation</string>
     <string name="rename_conversation_warning">Only you can see this conversation name</string>
+    <string name="group_senders">Group senders</string>
+    <string name="ungroup_senders">Ungroup senders</string>
+    <string name="show_grouped_senders">Show grouped senders</string>
+    <string name="grouped_senders">Grouped senders</string>
+    <string name="edit_grouped_senders">Edit grouped senders</string>
+    <string name="add_similar_senders">Add similar senders</string>
+    <string name="search_senders">Search senders</string>
+    <string name="no_short_code_senders">No short-code senders found</string>
+    <string name="no_similar_senders">No similar senders found</string>
+    <string name="select_at_least_two_senders">Select at least two senders</string>
+    <string name="selected_senders_count">%d selected</string>
+    <string name="in_sender_group">In group: %s</string>
+    <string name="search_in_conversation">Search in conversation</string>
+    <string name="previous_match">Previous match</string>
+    <string name="next_match">Next match</string>
+    <string name="hide_search">Close search</string>
+    <string name="search_match_count">%1$d/%2$d</string>
+    <string name="no_search_matches">No matches</string>
+    <string name="group_name">Group name</string>
+    <string name="ungroup_senders_confirmation">Split these senders back into separate conversations?</string>
     <!-- Schedule send -->
     <string name="scheduled_message">Scheduled message</string>
     <string name="schedule_message">Schedule message</string>
@@ -120,6 +140,9 @@
     <string name="import_mms">Import MMS</string>
     <string name="no_option_selected">You have to select at least one item</string>
     <string name="export_blocked_keywords">Export blocked keywords</string>
+    <string name="export_settings">Export settings</string>
+    <string name="import_settings">Import settings</string>
+    <string name="import_settings_confirmation">Import a previously exported settings file? This replaces your current settings on this phone, including sender groups and app password.</string>
     <string name="import_blocked_keywords">Import blocked keywords</string>
     <!-- Errors -->
     <string name="empty_destination_address">Can\'t send message to an empty number</string>

@@ -112,6 +112,7 @@ import org.fossify.messages.adapters.ThreadAdapter
 import org.fossify.messages.databinding.ActivityThreadBinding
 import org.fossify.messages.databinding.ItemSelectedContactBinding
 import org.fossify.messages.dialogs.GroupMessageSendDialog
+import org.fossify.messages.dialogs.GroupedSendersDialog
 import org.fossify.messages.dialogs.InvalidNumberDialog
 import org.fossify.messages.dialogs.RenameConversationDialog
 import org.fossify.messages.dialogs.ScheduleMessageDialog
@@ -131,6 +132,7 @@ import org.fossify.messages.extensions.getAddresses
 import org.fossify.messages.extensions.getDefaultKeyboardHeight
 import org.fossify.messages.extensions.getFileSizeFromUri
 import org.fossify.messages.extensions.getMessages
+import org.fossify.messages.extensions.getRelatedGroupedThreadIds
 import org.fossify.messages.extensions.getSmsDraft
 import org.fossify.messages.extensions.getThreadId
 import org.fossify.messages.extensions.getThreadParticipants
@@ -138,7 +140,9 @@ import org.fossify.messages.extensions.getThreadTitle
 import org.fossify.messages.extensions.indexOfFirstOrNull
 import org.fossify.messages.extensions.isGifMimeType
 import org.fossify.messages.extensions.isImageMimeType
+import org.fossify.messages.extensions.canGroupSenders
 import org.fossify.messages.extensions.launchConversationDetails
+import org.fossify.messages.extensions.launchSenderPicker
 import org.fossify.messages.extensions.markMessageRead
 import org.fossify.messages.extensions.markThreadMessagesRead
 import org.fossify.messages.extensions.markThreadMessagesUnread
@@ -146,10 +150,13 @@ import org.fossify.messages.extensions.messagesDB
 import org.fossify.messages.extensions.moveMessageToRecycleBin
 import org.fossify.messages.extensions.onScroll
 import org.fossify.messages.extensions.removeDiacriticsIfNeeded
+import org.fossify.messages.extensions.removeSenderGroupsForConversations
 import org.fossify.messages.extensions.renameConversation
+import org.fossify.messages.extensions.similarShortCodeKey
 import org.fossify.messages.extensions.restoreAllMessagesFromRecycleBinForConversation
 import org.fossify.messages.extensions.restoreMessageFromRecycleBin
 import org.fossify.messages.extensions.saveSmsDraft
+import org.fossify.messages.extensions.searchSmsIdsInThreads
 import org.fossify.messages.extensions.shouldUnarchive
 import org.fossify.messages.extensions.showWithAnimation
 import org.fossify.messages.extensions.subscriptionManagerCompat
@@ -180,6 +187,7 @@ import org.fossify.messages.helpers.THREAD_TEXT
 import org.fossify.messages.helpers.THREAD_TITLE
 import org.fossify.messages.helpers.generateRandomId
 import org.fossify.messages.helpers.refreshConversations
+import org.fossify.messages.helpers.requestTelephonySyncProgress
 import org.fossify.messages.helpers.refreshMessages
 import org.fossify.messages.messaging.cancelScheduleSendPendingIntent
 import org.fossify.messages.messaging.isLongMmsMessage
@@ -220,6 +228,11 @@ class ThreadActivity : SimpleActivity() {
     private var capturedImageUri: Uri? = null
     private var loadingOlderMessages = false
     private var allMessagesFetched = false
+    private var groupedSearchQuery = ""
+    private var groupedSearchMatchIds: List<Long> = emptyList()
+    private var groupedSearchMatchIndex = -1
+    private var groupedSearchGeneration = 0
+    private var pendingGroupedSearch: Runnable? = null
     private var isJumpingToMessage = false
     private var isRecycleBin = false
     private var isLaunchedFromShortcut = false
@@ -244,6 +257,7 @@ class ThreadActivity : SimpleActivity() {
         super.onCreate(savedInstanceState)
         setContentView(binding.root)
         setupOptionsMenu()
+        setupGroupedSearch()
         refreshMenuItems()
         setupEdgeToEdge(
             padBottomImeAndSystem = listOf(
@@ -328,7 +342,10 @@ class ThreadActivity : SimpleActivity() {
 
     override fun onBackPressedCompat(): Boolean {
         isAttachmentPickerVisible = false
-        return if (binding.messageHolder.attachmentPickerHolder.isVisible()) {
+        return if (binding.threadSearchHolder.isVisible()) {
+            closeGroupedSearch()
+            true
+        } else if (binding.messageHolder.attachmentPickerHolder.isVisible()) {
             hideAttachmentPicker()
             true
         } else {
@@ -362,8 +379,23 @@ class ThreadActivity : SimpleActivity() {
                 threadItems.isNotEmpty() && conversation?.isArchived == false && !isRecycleBin && archiveAvailable
             findItem(R.id.unarchive).isVisible =
                 threadItems.isNotEmpty() && conversation?.isArchived == true && !isRecycleBin && archiveAvailable
+            val isSenderGroup = conversation?.let {
+                config.findSenderGroupByAddress(it.phoneNumber) != null
+            } == true
             findItem(R.id.rename_conversation).isVisible =
-                participants.size > 1 && conversation != null && !isRecycleBin
+                conversation != null && !isRecycleBin && (participants.size > 1 || isSenderGroup)
+            val isGroupableShortCode = conversation?.canGroupSenders() == true && !isRecycleBin
+            findItem(R.id.group_senders).isVisible = isGroupableShortCode
+            findItem(R.id.group_senders).title = if (isSenderGroup) {
+                getString(R.string.edit_grouped_senders)
+            } else {
+                getString(R.string.group_senders)
+            }
+            findItem(R.id.add_similar_senders).isVisible =
+                isGroupableShortCode && conversation?.phoneNumber?.similarShortCodeKey() != null
+            findItem(R.id.show_grouped_senders).isVisible = isSenderGroup && !isRecycleBin
+            findItem(R.id.search_grouped_messages).isVisible = isSenderGroup && !isRecycleBin
+            findItem(R.id.ungroup_senders).isVisible = isSenderGroup && !isRecycleBin
             findItem(R.id.conversation_details).isVisible = conversation != null && !isRecycleBin
             findItem(R.id.block_number).title =
                 addLockedLabelIfNeeded(org.fossify.commons.R.string.block_number)
@@ -396,6 +428,11 @@ class ThreadActivity : SimpleActivity() {
             R.id.archive -> archiveConversation()
             R.id.unarchive -> unarchiveConversation()
             R.id.rename_conversation -> renameConversation()
+            R.id.group_senders -> openSenderPicker(suggestSimilar = false)
+            R.id.add_similar_senders -> openSenderPicker(suggestSimilar = true)
+            R.id.show_grouped_senders -> showGroupedSenders()
+            R.id.search_grouped_messages -> openGroupedSearch()
+            R.id.ungroup_senders -> askConfirmUngroupSenders()
             R.id.conversation_details -> launchConversationDetails(threadId)
             R.id.add_number_to_contact -> addNumberToContact()
             R.id.copy_number -> copyNumberToClipboard()
@@ -434,13 +471,14 @@ class ThreadActivity : SimpleActivity() {
     private fun setupCachedMessages(callback: () -> Unit) {
         ensureBackgroundThread {
             messages = try {
+                val relatedThreadIds = getRelatedGroupedThreadIds(threadId)
                 if (isRecycleBin) {
-                    messagesDB.getThreadMessagesFromRecycleBin(threadId)
+                    relatedThreadIds.flatMap { messagesDB.getThreadMessagesFromRecycleBin(it) }
                 } else {
                     if (config.useRecycleBin) {
-                        messagesDB.getNonRecycledThreadMessages(threadId)
+                        relatedThreadIds.flatMap { messagesDB.getNonRecycledThreadMessages(it) }
                     } else {
-                        messagesDB.getThreadMessages(threadId)
+                        relatedThreadIds.flatMap { messagesDB.getThreadMessages(it) }
                     }
                 }
             } catch (e: Exception) {
@@ -490,7 +528,8 @@ class ThreadActivity : SimpleActivity() {
             if (!isRecycleBin) {
                 messages = getMessages(threadId)
                 if (config.useRecycleBin) {
-                    val recycledMessages = messagesDB.getThreadMessagesFromRecycleBin(threadId)
+                    val recycledMessages = getRelatedGroupedThreadIds(threadId)
+                        .flatMap { messagesDB.getThreadMessagesFromRecycleBin(it) }
                     messages = messages.filterNotInByKey(recycledMessages) { it.getStableId() }
                 }
                 messages = messages.toSortedMessages()
@@ -744,6 +783,124 @@ class ThreadActivity : SimpleActivity() {
             createTemporaryThread(scheduledMessage, fakeThreadId, conversation)
             updateScheduledMessagesThreadId(messages, fakeThreadId)
             threadId = fakeThreadId
+        }
+    }
+
+    private fun setupGroupedSearch() {
+        updateTextColors(binding.threadSearchHolder)
+        binding.threadSearchPrev.applyColorFilter(getProperTextColor())
+        binding.threadSearchNext.applyColorFilter(getProperTextColor())
+        binding.threadSearchClose.applyColorFilter(getProperTextColor())
+        binding.threadSearchQuery.onTextChangeListener { text ->
+            onGroupedSearchQueryChanged(text)
+        }
+        binding.threadSearchQuery.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_SEARCH) {
+                navigateGroupedSearchMatch(1)
+                true
+            } else {
+                false
+            }
+        }
+        binding.threadSearchPrev.setOnClickListener { navigateGroupedSearchMatch(-1) }
+        binding.threadSearchNext.setOnClickListener { navigateGroupedSearchMatch(1) }
+        binding.threadSearchClose.setOnClickListener { closeGroupedSearch() }
+    }
+
+    private fun openGroupedSearch() {
+        binding.threadSearchHolder.beVisible()
+        binding.threadSearchQuery.requestFocus()
+        showKeyboard(binding.threadSearchQuery)
+    }
+
+    private fun closeGroupedSearch() {
+        pendingGroupedSearch?.let { binding.root.removeCallbacks(it) }
+        pendingGroupedSearch = null
+        groupedSearchGeneration++
+        groupedSearchQuery = ""
+        groupedSearchMatchIds = emptyList()
+        groupedSearchMatchIndex = -1
+        binding.threadSearchQuery.setText("")
+        binding.threadSearchCount.text = ""
+        getOrCreateThreadAdapter().setSearchHighlight("", -1L)
+        binding.threadSearchHolder.beGone()
+        hideKeyboard()
+    }
+
+    private fun onGroupedSearchQueryChanged(text: String) {
+        groupedSearchQuery = text.trim()
+        pendingGroupedSearch?.let { binding.root.removeCallbacks(it) }
+        pendingGroupedSearch = null
+        if (groupedSearchQuery.isEmpty()) {
+            groupedSearchGeneration++
+            groupedSearchMatchIds = emptyList()
+            groupedSearchMatchIndex = -1
+            binding.threadSearchCount.text = ""
+            getOrCreateThreadAdapter().setSearchHighlight("", -1L)
+            return
+        }
+        binding.threadSearchCount.text = ""
+        val runnable = Runnable { runGroupedSearch() }
+        pendingGroupedSearch = runnable
+        binding.root.postDelayed(runnable, SEARCH_DEBOUNCE_MS)
+    }
+
+    private fun runGroupedSearch() {
+        pendingGroupedSearch = null
+        val query = groupedSearchQuery
+        if (query.isEmpty()) return
+        val generation = ++groupedSearchGeneration
+        ensureBackgroundThread {
+            val threadIds = getRelatedGroupedThreadIds(threadId)
+            val matches = searchSmsIdsInThreads(threadIds, query)
+            runOnUiThread {
+                if (generation != groupedSearchGeneration || query != groupedSearchQuery) {
+                    return@runOnUiThread
+                }
+                groupedSearchMatchIds = matches
+                groupedSearchMatchIndex = if (matches.isEmpty()) -1 else 0
+                updateGroupedSearchCount()
+                if (matches.isNotEmpty()) {
+                    focusGroupedSearchMatch(0)
+                } else {
+                    getOrCreateThreadAdapter().setSearchHighlight(query, -1L)
+                }
+            }
+        }
+    }
+
+    private fun focusGroupedSearchMatch(index: Int) {
+        val matchId = groupedSearchMatchIds.getOrNull(index) ?: return
+        getOrCreateThreadAdapter().setSearchHighlight(groupedSearchQuery, matchId)
+        updateGroupedSearchCount()
+        val itemIndex = threadItems.indexOfFirst { (it as? Message)?.id == matchId }
+        if (itemIndex != -1) {
+            binding.threadMessagesList.smoothScrollToPosition(itemIndex)
+        } else {
+            // the match is in older, not yet loaded messages
+            jumpToMessage(matchId)
+        }
+    }
+
+    private fun navigateGroupedSearchMatch(direction: Int) {
+        if (groupedSearchMatchIds.isEmpty()) return
+        groupedSearchMatchIndex = if (groupedSearchMatchIndex == -1) {
+            if (direction > 0) 0 else groupedSearchMatchIds.lastIndex
+        } else {
+            (groupedSearchMatchIndex + direction + groupedSearchMatchIds.size) % groupedSearchMatchIds.size
+        }
+        focusGroupedSearchMatch(groupedSearchMatchIndex)
+    }
+
+    private fun updateGroupedSearchCount() {
+        binding.threadSearchCount.text = when {
+            groupedSearchQuery.isEmpty() -> ""
+            groupedSearchMatchIds.isEmpty() -> getString(R.string.no_search_matches)
+            else -> getString(
+                R.string.search_match_count,
+                groupedSearchMatchIndex + 1,
+                groupedSearchMatchIds.size
+            )
         }
     }
 
@@ -1309,6 +1466,31 @@ class ThreadActivity : SimpleActivity() {
             type = "vnd.android.cursor.item/contact"
             putExtra(KEY_PHONE, phoneNumber)
             launchActivityIntent(this)
+        }
+    }
+
+    private fun openSenderPicker(suggestSimilar: Boolean) {
+        val address = conversation?.phoneNumber ?: return
+        val preselected = config.findSenderGroupByAddress(address)?.addresses ?: listOf(address)
+        launchSenderPicker(preselected, suggestSimilar = suggestSimilar)
+    }
+
+    private fun showGroupedSenders() {
+        val address = conversation?.phoneNumber ?: return
+        val group = config.findSenderGroupByAddress(address) ?: return
+        GroupedSendersDialog(this, group.addresses.sorted())
+    }
+
+    private fun askConfirmUngroupSenders() {
+        val currentConversation = conversation ?: return
+        ConfirmationDialog(this, getString(R.string.ungroup_senders_confirmation)) {
+            ensureBackgroundThread {
+                removeSenderGroupsForConversations(listOf(currentConversation))
+                runOnUiThread {
+                    refreshConversations(cacheOnly = true)
+                    finish()
+                }
+            }
         }
     }
 
@@ -2206,5 +2388,6 @@ class ThreadActivity : SimpleActivity() {
         private const val MIN_DATE_TIME_DIFF_SECS = 300
         private const val SCROLL_TO_BOTTOM_FAB_LIMIT = 20
         private const val PREFETCH_THRESHOLD = 45
+        private const val SEARCH_DEBOUNCE_MS = 250L
     }
 }

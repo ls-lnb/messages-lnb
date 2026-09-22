@@ -38,6 +38,7 @@ import org.fossify.commons.extensions.formatDateOrTime
 import org.fossify.commons.extensions.getContrastColor
 import org.fossify.commons.extensions.getProperPrimaryColor
 import org.fossify.commons.extensions.getTextSize
+import org.fossify.commons.extensions.highlightTextPart
 import org.fossify.commons.extensions.getTimeFormat
 import org.fossify.commons.extensions.shareTextIntent
 import org.fossify.commons.extensions.showErrorToast
@@ -97,6 +98,8 @@ class ThreadAdapter(
     val deleteMessages: (messages: List<Message>, toRecycleBin: Boolean, fromRecycleBin: Boolean) -> Unit
 ) : MyRecyclerViewListAdapter<ThreadItem>(activity, recyclerView, ThreadItemDiffCallback(), itemClick) {
     private var fontSize = activity.getTextSize()
+    private var searchQuery = ""
+    private var highlightedMessageId = -1L
 
     @SuppressLint("MissingPermission")
     private val hasMultipleSIMCards = (activity.subscriptionManagerCompat().activeSubscriptionInfoList?.size ?: 0) > 1
@@ -346,6 +349,15 @@ class ThreadAdapter(
 
     private fun isThreadDateTime(position: Int) = currentList.getOrNull(position) is ThreadDateTime
 
+    fun setSearchHighlight(query: String, messageId: Long) {
+        if (searchQuery == query && highlightedMessageId == messageId) {
+            return
+        }
+        searchQuery = query
+        highlightedMessageId = messageId
+        notifyDataSetChanged()
+    }
+
     fun updateMessages(
         newMessages: List<ThreadItem>,
         scrollPosition: Int = -1,
@@ -367,7 +379,14 @@ class ThreadAdapter(
         ItemMessageBinding.bind(view).apply {
             threadMessageHolder.isSelected = selectedKeys.contains(message.getSelectionKey())
             threadMessageBody.apply {
-                text = message.body
+                text = if (searchQuery.isNotEmpty() && message.body.contains(searchQuery, true)) {
+                    message.body.highlightTextPart(searchQuery, properPrimaryColor)
+                } else {
+                    message.body
+                }
+                alpha = if (highlightedMessageId != -1L && message.id == highlightedMessageId) 1f else {
+                    if (searchQuery.isNotEmpty()) 0.85f else 1f
+                }
                 setTextSize(TypedValue.COMPLEX_UNIT_PX, fontSize)
                 beVisibleIf(message.body.isNotEmpty())
                 setOnLongClickListener {

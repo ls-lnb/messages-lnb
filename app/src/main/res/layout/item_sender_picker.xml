@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="?attr/selectableItemBackground"
+    android:minHeight="@dimen/two_line_list_item_min_height"
+    android:paddingStart="@dimen/activity_margin"
+    android:paddingTop="@dimen/medium_margin"
+    android:paddingEnd="@dimen/activity_margin"
+    android:paddingBottom="@dimen/medium_margin">
+
+    <com.google.android.material.checkbox.MaterialCheckBox
+        android:id="@+id/sender_picker_check"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:clickable="false"
+        android:focusable="false"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <org.fossify.commons.views.MyTextView
+        android:id="@+id/sender_picker_address"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="@dimen/medium_margin"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:textSize="@dimen/list_primary_text_size"
+        app:layout_constraintBottom_toTopOf="@id/sender_picker_details"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toEndOf="@id/sender_picker_check"
+        app:layout_constraintTop_toTopOf="parent"
+        tools:text="JM-HDFCBK-S" />
+
+    <org.fossify.commons.views.MyTextView
+        android:id="@+id/sender_picker_details"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="@dimen/medium_margin"
+        android:alpha="0.7"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:textSize="@dimen/list_secondary_text_size"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toEndOf="@id/sender_picker_check"
+        app:layout_constraintTop_toBottomOf="@id/sender_picker_address"
+        tools:text="In group: HDFC" />
+</androidx.constraintlayout.widget.ConstraintLayout>

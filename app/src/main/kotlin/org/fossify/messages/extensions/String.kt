@@ -47,3 +47,14 @@ fun String.isZipMimeType(): Boolean {
 fun String.isPlainTextMimeType(): Boolean {
     return lowercase() == "text/plain"
 }
+
+private val similarShortCodeRegex = Regex("^[A-Za-z]{2}-(.+)\$")
+
+/**
+ * Optional similarity key for letter short codes like `JM-HDFCBK-S` -> `HDFCBK-S`.
+ * Used only for suggestions, never for automatic grouping.
+ */
+fun String.similarShortCodeKey(): String? {
+    val match = similarShortCodeRegex.matchEntire(trim()) ?: return null
+    return match.groupValues[1].ifBlank { null }?.uppercase()
+}
