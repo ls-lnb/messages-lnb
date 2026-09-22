@@ -140,7 +140,9 @@ import org.fossify.messages.extensions.getThreadTitle
 import org.fossify.messages.extensions.indexOfFirstOrNull
 import org.fossify.messages.extensions.isGifMimeType
 import org.fossify.messages.extensions.isImageMimeType
+import org.fossify.messages.extensions.canGroupSenders
 import org.fossify.messages.extensions.launchConversationDetails
+import org.fossify.messages.extensions.launchSenderPicker
 import org.fossify.messages.extensions.markMessageRead
 import org.fossify.messages.extensions.markThreadMessagesRead
 import org.fossify.messages.extensions.markThreadMessagesUnread
@@ -150,6 +152,7 @@ import org.fossify.messages.extensions.onScroll
 import org.fossify.messages.extensions.removeDiacriticsIfNeeded
 import org.fossify.messages.extensions.removeSenderGroupsForConversations
 import org.fossify.messages.extensions.renameConversation
+import org.fossify.messages.extensions.similarShortCodeKey
 import org.fossify.messages.extensions.restoreAllMessagesFromRecycleBinForConversation
 import org.fossify.messages.extensions.restoreMessageFromRecycleBin
 import org.fossify.messages.extensions.saveSmsDraft
@@ -371,6 +374,15 @@ class ThreadActivity : SimpleActivity() {
             } == true
             findItem(R.id.rename_conversation).isVisible =
                 conversation != null && !isRecycleBin && (participants.size > 1 || isSenderGroup)
+            val isGroupableShortCode = conversation?.canGroupSenders() == true && !isRecycleBin
+            findItem(R.id.group_senders).isVisible = isGroupableShortCode
+            findItem(R.id.group_senders).title = if (isSenderGroup) {
+                getString(R.string.edit_grouped_senders)
+            } else {
+                getString(R.string.group_senders)
+            }
+            findItem(R.id.add_similar_senders).isVisible =
+                isGroupableShortCode && conversation?.phoneNumber?.similarShortCodeKey() != null
             findItem(R.id.show_grouped_senders).isVisible = isSenderGroup && !isRecycleBin
             findItem(R.id.ungroup_senders).isVisible = isSenderGroup && !isRecycleBin
             findItem(R.id.conversation_details).isVisible = conversation != null && !isRecycleBin
@@ -405,6 +417,8 @@ class ThreadActivity : SimpleActivity() {
             R.id.archive -> archiveConversation()
             R.id.unarchive -> unarchiveConversation()
             R.id.rename_conversation -> renameConversation()
+            R.id.group_senders -> openSenderPicker(suggestSimilar = false)
+            R.id.add_similar_senders -> openSenderPicker(suggestSimilar = true)
             R.id.show_grouped_senders -> showGroupedSenders()
             R.id.ungroup_senders -> askConfirmUngroupSenders()
             R.id.conversation_details -> launchConversationDetails(threadId)
@@ -1323,6 +1337,12 @@ class ThreadActivity : SimpleActivity() {
             putExtra(KEY_PHONE, phoneNumber)
             launchActivityIntent(this)
         }
+    }
+
+    private fun openSenderPicker(suggestSimilar: Boolean) {
+        val address = conversation?.phoneNumber ?: return
+        val preselected = config.findSenderGroupByAddress(address)?.addresses ?: listOf(address)
+        launchSenderPicker(preselected, suggestSimilar = suggestSimilar)
     }
 
     private fun showGroupedSenders() {

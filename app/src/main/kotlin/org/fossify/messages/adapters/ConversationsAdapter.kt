@@ -17,14 +17,13 @@ import org.fossify.commons.views.MyRecyclerView
 import org.fossify.messages.R
 import org.fossify.messages.activities.MainActivity
 import org.fossify.messages.activities.SimpleActivity
-import org.fossify.messages.dialogs.GroupSendersDialog
 import org.fossify.messages.dialogs.RenameConversationDialog
 import org.fossify.messages.extensions.canGroupSenders
 import org.fossify.messages.extensions.config
-import org.fossify.messages.extensions.createOrMergeSenderGroup
 import org.fossify.messages.extensions.deleteConversation
 import org.fossify.messages.extensions.dialNumber
 import org.fossify.messages.extensions.launchConversationDetails
+import org.fossify.messages.extensions.launchSenderPicker
 import org.fossify.messages.extensions.markThreadMessagesRead
 import org.fossify.messages.extensions.markThreadMessagesUnread
 import org.fossify.messages.extensions.removeSenderGroupsForConversations
@@ -49,7 +48,7 @@ class ConversationsAdapter(
         val selectedConversation = selectedItems.firstOrNull() ?: return
         val isGroupConversation = selectedConversation.isGroupConversation
         val archiveAvailable = activity.config.isArchiveAvailable
-        val canGroupSelected = selectedItems.size >= 2 && selectedItems.all { it.canGroupSenders() }
+        val canGroupSelected = selectedItems.isNotEmpty() && selectedItems.all { it.canGroupSenders() }
         val isSenderGroup = selectedItems.all {
             activity.config.findSenderGroupByAddress(it.phoneNumber) != null
         }
@@ -248,23 +247,16 @@ class ConversationsAdapter(
 
     private fun groupSenders() {
         val selectedItems = getSelectedItems()
-        if (selectedItems.size < 2) {
+        if (selectedItems.isEmpty()) {
             return
         }
 
-        val existingGroups = selectedItems.mapNotNull {
-            activity.config.findSenderGroupByAddress(it.phoneNumber)
-        }.distinctBy { it.id }
-        val prefilledName = existingGroups.singleOrNull()?.title
-            ?: selectedItems.maxByOrNull { it.date }?.title.orEmpty()
-
-        GroupSendersDialog(activity, prefilledName) { name ->
-            showGroupingProgress()
-            ensureBackgroundThread {
-                activity.createOrMergeSenderGroup(selectedItems, name)
-                refreshConversationsAndFinishActMode()
-            }
-        }
+        val addresses = selectedItems.flatMap { conversation ->
+            activity.config.findSenderGroupByAddress(conversation.phoneNumber)?.addresses
+                ?: listOf(conversation.phoneNumber)
+        }.distinct()
+        activity.launchSenderPicker(addresses)
+        finishActMode()
     }
 
     private fun askConfirmUngroup() {

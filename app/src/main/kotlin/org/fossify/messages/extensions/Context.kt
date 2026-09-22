@@ -362,6 +362,7 @@ fun Context.getUnreadCountsByThread(): Map<Long, Int> {
 fun Context.getConversations(
     threadId: Long? = null,
     privateContacts: ArrayList<SimpleContact> = ArrayList(),
+    applySenderGroups: Boolean = true,
 ): ArrayList<Conversation> {
     val archiveAvailable = config.isArchiveAvailable
 
@@ -460,7 +461,7 @@ fun Context.getConversations(
             && archiveAvailable
         ) {
             config.isArchiveAvailable = false
-            return getConversations(threadId, privateContacts)
+            return getConversations(threadId, privateContacts, applySenderGroups)
         } else {
             showErrorToast(sqliteException)
         }
@@ -469,6 +470,9 @@ fun Context.getConversations(
     }
 
     conversations.sortByDescending { it.date }
+    if (!applySenderGroups) {
+        return conversations
+    }
     return groupUserSenderConversations(
         conversations = conversations,
         replaceCache = threadId == null
@@ -607,6 +611,35 @@ fun Context.createOrMergeSenderGroup(conversations: List<Conversation>, title: S
     val keepId = existing.firstOrNull { it.id in groupsToRemove }?.id ?: UUID.randomUUID().toString()
     val newGroup = SenderGroup(id = keepId, title = title, addresses = addresses.toList())
     config.senderGroups = existing.filter { it.id !in groupsToRemove } + newGroup
+    SenderGrouping.updateGroups(emptyList())
+}
+
+fun Context.saveSenderGroupFromSelection(conversations: List<Conversation>, title: String) {
+    val selectedAddresses = conversations.map { it.phoneNumber.uppercase() }.distinct()
+    if (selectedAddresses.size < 2) {
+        return
+    }
+
+    val selectedSet = selectedAddresses.toSet()
+    val existing = config.senderGroups
+    val keepId = existing.firstOrNull { group ->
+        group.addresses.any { it.uppercase() in selectedSet }
+    }?.id ?: UUID.randomUUID().toString()
+
+    val rewritten = existing.mapNotNull { group ->
+        if (group.id == keepId) {
+            null
+        } else {
+            val remaining = group.addresses.filter { it.uppercase() !in selectedSet }
+            if (remaining.size < 2) null else group.copy(addresses = remaining)
+        }
+    }
+
+    config.senderGroups = rewritten + SenderGroup(
+        id = keepId,
+        title = title,
+        addresses = selectedAddresses
+    )
     SenderGrouping.updateGroups(emptyList())
 }
 

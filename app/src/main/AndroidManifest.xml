@@ -71,6 +71,14 @@
             android:windowSoftInputMode="adjustResize" />
 
         <activity
+            android:name=".activities.SenderPickerActivity"
+            android:configChanges="orientation"
+            android:exported="false"
+            android:label="@string/group_senders"
+            android:parentActivityName=".activities.MainActivity"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity
             android:name=".activities.NewConversationActivity"
             android:configChanges="orientation"
             android:exported="true"

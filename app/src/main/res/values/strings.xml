@@ -40,6 +40,14 @@
     <string name="ungroup_senders">Ungroup senders</string>
     <string name="show_grouped_senders">Show grouped senders</string>
     <string name="grouped_senders">Grouped senders</string>
+    <string name="edit_grouped_senders">Edit grouped senders</string>
+    <string name="add_similar_senders">Add similar senders</string>
+    <string name="search_senders">Search senders</string>
+    <string name="no_short_code_senders">No short-code senders found</string>
+    <string name="no_similar_senders">No similar senders found</string>
+    <string name="select_at_least_two_senders">Select at least two senders</string>
+    <string name="selected_senders_count">%d selected</string>
+    <string name="in_sender_group">In group: %s</string>
     <string name="group_name">Group name</string>
     <string name="ungroup_senders_confirmation">Split these senders back into separate conversations?</string>
     <!-- Schedule send -->

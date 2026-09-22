@@ -49,6 +49,8 @@ const val CUSTOM_NOTIFICATIONS = "custom_notifications"
 const val IS_LAUNCHED_FROM_SHORTCUT = "is_launched_from_shortcut"
 const val KEEP_CONVERSATIONS_ARCHIVED = "keep_conversations_archived"
 const val SENDER_GROUPS = "sender_groups"
+const val PRESELECTED_SENDER_ADDRESSES = "preselected_sender_addresses"
+const val SUGGEST_SIMILAR_SENDERS = "suggest_similar_senders"
 const val LAST_APP_UPDATE_TIME = "last_app_update_time"
 const val WAS_DEFAULT_SMS_APP = "was_default_sms_app"
 
