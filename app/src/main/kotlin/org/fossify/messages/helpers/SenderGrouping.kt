@@ -8,6 +8,10 @@ object SenderGrouping {
     @Volatile
     var pendingUiRefresh = false
 
+    /** Set after a settings import; triggers a full conversation reload with the sync bar. */
+    @Volatile
+    var pendingRestoreUiRefresh = false
+
     @Volatile
     private var relatedThreadIds: Map<Long, List<Long>> = emptyMap()
 

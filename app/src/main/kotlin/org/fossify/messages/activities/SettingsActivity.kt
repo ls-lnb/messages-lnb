@@ -1,6 +1,7 @@
 package org.fossify.messages.activities
 
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.result.contract.ActivityResultContracts
 import org.fossify.commons.activities.ManageBlockedNumbersActivity
@@ -15,9 +16,11 @@ import org.fossify.commons.extensions.beVisible
 import org.fossify.commons.extensions.beVisibleIf
 import org.fossify.commons.extensions.formatWithDeprecatedBadge
 import org.fossify.commons.extensions.getBlockedNumbers
+import org.fossify.commons.extensions.getCurrentFormattedDateTime
 import org.fossify.commons.extensions.getFontSizeText
 import org.fossify.commons.extensions.getProperPrimaryColor
 import org.fossify.commons.extensions.isOrWasThankYouInstalled
+import org.fossify.commons.extensions.showErrorToast
 import org.fossify.commons.extensions.toast
 import org.fossify.commons.extensions.updateTextColors
 import org.fossify.commons.extensions.viewBinding
@@ -38,6 +41,7 @@ import org.fossify.messages.dialogs.ExportMessagesDialog
 import org.fossify.messages.extensions.config
 import org.fossify.messages.extensions.emptyMessagesRecycleBin
 import org.fossify.messages.extensions.messagesDB
+import org.fossify.messages.helpers.Config
 import org.fossify.messages.helpers.FILE_SIZE_100_KB
 import org.fossify.messages.helpers.FILE_SIZE_1_MB
 import org.fossify.messages.helpers.FILE_SIZE_200_KB
@@ -49,7 +53,11 @@ import org.fossify.messages.helpers.LOCK_SCREEN_NOTHING
 import org.fossify.messages.helpers.LOCK_SCREEN_SENDER
 import org.fossify.messages.helpers.LOCK_SCREEN_SENDER_MESSAGE
 import org.fossify.messages.helpers.MessagesImporter
+import org.fossify.messages.helpers.SenderGrouping
+import org.fossify.messages.helpers.SettingsBackup
 import org.fossify.messages.helpers.refreshConversations
+import org.fossify.messages.helpers.requestTelephonySyncProgress
+import java.io.IOException
 import java.util.Locale
 import kotlin.system.exitProcess
 
@@ -80,6 +88,20 @@ class SettingsActivity : SimpleActivity() {
             if (uri != null) {
                 toast(org.fossify.commons.R.string.exporting)
                 exportMessagesDialog?.exportMessages(uri)
+            }
+        }
+
+    private val exportSettingsDocument =
+        registerForActivityResult(ActivityResultContracts.CreateDocument(messagesFileType)) { uri ->
+            if (uri != null) {
+                exportSettings(uri)
+            }
+        }
+
+    private val importSettingsDocument =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) {
+                confirmImportSettings(uri)
             }
         }
 
@@ -122,6 +144,8 @@ class SettingsActivity : SimpleActivity() {
         setupAppPasswordProtection()
         setupMessagesExport()
         setupMessagesImport()
+        setupSettingsExport()
+        setupSettingsImport()
         updateTextColors(binding.settingsNestedScrollview)
 
         if (
@@ -155,6 +179,71 @@ class SettingsActivity : SimpleActivity() {
     private fun setupMessagesImport() {
         binding.settingsImportMessagesHolder.setOnClickListener {
             getContent.launch(messageImportFileTypes.toTypedArray())
+        }
+    }
+
+    private fun setupSettingsExport() {
+        binding.settingsExportSettingsHolder.setOnClickListener {
+            exportSettingsDocument.launch(
+                "messages_settings_${getCurrentFormattedDateTime()}.json"
+            )
+        }
+    }
+
+    private fun setupSettingsImport() {
+        binding.settingsImportSettingsHolder.setOnClickListener {
+            importSettingsDocument.launch(
+                arrayOf("application/json", "text/plain", "text/*", "application/octet-stream")
+            )
+        }
+    }
+
+    private fun exportSettings(uri: Uri) {
+        toast(org.fossify.commons.R.string.exporting)
+        ensureBackgroundThread {
+            try {
+                val json = SettingsBackup.exportToJson(this)
+                val outputStream = contentResolver.openOutputStream(uri)
+                    ?: throw IOException("Unable to open the selected file")
+                outputStream.use { it.write(json.toByteArray(Charsets.UTF_8)) }
+                runOnUiThread { toast(org.fossify.commons.R.string.exporting_successful) }
+            } catch (e: Exception) {
+                runOnUiThread { showErrorToast(e) }
+            }
+        }
+    }
+
+    private fun confirmImportSettings(uri: Uri) {
+        ConfirmationDialog(
+            activity = this,
+            message = "",
+            messageId = R.string.import_settings_confirmation,
+            positive = org.fossify.commons.R.string.yes,
+            negative = org.fossify.commons.R.string.no
+        ) {
+            importSettings(uri)
+        }
+    }
+
+    private fun importSettings(uri: Uri) {
+        toast(org.fossify.commons.R.string.importing)
+        ensureBackgroundThread {
+            try {
+                val json = contentResolver.openInputStream(uri)
+                    ?.use { it.readBytes().decodeToString() }
+                    ?: throw IOException("Unable to read the selected file")
+                SettingsBackup.importFromJson(this, json)
+
+                // drop stale in-memory caches and reload conversations with the sync bar
+                Config.memorySenderGroups = null
+                SenderGrouping.updateGroups(emptyList())
+                SenderGrouping.pendingUiRefresh = true
+                SenderGrouping.pendingRestoreUiRefresh = true
+                requestTelephonySyncProgress()
+                runOnUiThread { toast(org.fossify.commons.R.string.importing_successful) }
+            } catch (e: Exception) {
+                runOnUiThread { showErrorToast(e) }
+            }
         }
     }
 

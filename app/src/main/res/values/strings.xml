@@ -140,6 +140,9 @@
     <string name="import_mms">Import MMS</string>
     <string name="no_option_selected">You have to select at least one item</string>
     <string name="export_blocked_keywords">Export blocked keywords</string>
+    <string name="export_settings">Export settings</string>
+    <string name="import_settings">Import settings</string>
+    <string name="import_settings_confirmation">Import a previously exported settings file? This replaces your current settings on this phone, including sender groups and app password.</string>
     <string name="import_blocked_keywords">Import blocked keywords</string>
     <!-- Errors -->
     <string name="empty_destination_address">Can\'t send message to an empty number</string>

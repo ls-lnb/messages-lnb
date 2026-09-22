@@ -119,7 +119,13 @@ class MainActivity : SimpleActivity() {
         super.onResume()
         updateMenuColors()
         refreshMenuItems()
-        if (SenderGrouping.pendingUiRefresh) {
+        if (SenderGrouping.pendingRestoreUiRefresh) {
+            SenderGrouping.pendingRestoreUiRefresh = false
+            SenderGrouping.pendingUiRefresh = false
+            // settings were restored from a backup; reload everything so the bottom sync
+            // bar shows while conversations are regrouped
+            initMessenger()
+        } else if (SenderGrouping.pendingUiRefresh) {
             reloadGroupedConversationsFromCache()
         }
 
