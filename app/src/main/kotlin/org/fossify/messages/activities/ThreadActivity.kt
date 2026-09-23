@@ -620,6 +620,18 @@ class ThreadActivity : SimpleActivity() {
         return messages.hashCode() == cachedMessagesCode
     }
 
+    private fun isGroupedSenderThread(): Boolean {
+        if (config.findSenderGroupByThreadId(threadId) != null) {
+            return true
+        }
+
+        val addresses = buildList {
+            conversation?.phoneNumber?.let { add(it) }
+            addAll(participants.getAddresses())
+        }
+        return addresses.any { config.findSenderGroupByAddress(it) != null }
+    }
+
     private fun getOrCreateThreadAdapter(): ThreadAdapter {
         var currAdapter = binding.threadMessagesList.adapter
         if (currAdapter == null) {
@@ -628,6 +640,7 @@ class ThreadActivity : SimpleActivity() {
                 recyclerView = binding.threadMessagesList,
                 itemClick = { handleItemClick(it) },
                 isRecycleBin = isRecycleBin,
+                showSenderCodes = { isGroupedSenderThread() },
                 deleteMessages = { messages, toRecycleBin, fromRecycleBin ->
                     deleteMessages(
                         messages,

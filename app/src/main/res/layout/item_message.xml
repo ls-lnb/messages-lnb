@@ -65,5 +65,20 @@
             android:textSize="@dimen/normal_text_size"
             tools:drawableEndCompat="@drawable/scheduled_message_icon"
             tools:text="Message content" />
+
+        <TextView
+            android:id="@+id/thread_message_sender_code"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_alignEnd="@id/thread_message_body"
+            android:layout_alignStart="@id/thread_message_body"
+            android:layout_below="@id/thread_message_body"
+            android:layout_marginTop="@dimen/tiny_margin"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textSize="@dimen/smaller_text_size"
+            android:visibility="gone"
+            tools:text="sender-code"
+            tools:visibility="visible" />
     </RelativeLayout>
 </androidx.constraintlayout.widget.ConstraintLayout>
