@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
 import android.util.TypedValue
+import android.view.Gravity
 import android.view.Menu
 import android.view.View
 import android.view.ViewGroup
@@ -95,6 +96,7 @@ class ThreadAdapter(
     recyclerView: MyRecyclerView,
     itemClick: (Any) -> Unit,
     val isRecycleBin: Boolean,
+    val showSenderCodes: () -> Boolean,
     val deleteMessages: (messages: List<Message>, toRecycleBin: Boolean, fromRecycleBin: Boolean) -> Unit
 ) : MyRecyclerViewListAdapter<ThreadItem>(activity, recyclerView, ThreadItemDiffCallback(), itemClick) {
     private var fontSize = activity.getTextSize()
@@ -109,6 +111,8 @@ class ThreadAdapter(
         private const val MAX_MEDIA_HEIGHT_RATIO = 3
         private const val SIM_BITS = 21
         private const val SIM_MASK = (1L shl SIM_BITS) - 1
+        private const val SENDER_CODE_TEXT_RATIO = 0.75f
+        private const val SENDER_CODE_ALPHA = 0.6f
     }
 
     init {
@@ -403,6 +407,18 @@ class ThreadAdapter(
                 setupReceivedMessageView(messageBinding = this, message = message)
             } else {
                 setupSentMessageView(messageBinding = this, message = message)
+            }
+
+            threadMessageSenderCode.apply {
+                val showSenderCode = message.isReceivedMessage() &&
+                    message.senderPhoneNumber.isNotEmpty() &&
+                    showSenderCodes()
+                alpha = SENDER_CODE_ALPHA
+                gravity = Gravity.START
+                setTextSize(TypedValue.COMPLEX_UNIT_PX, fontSize * SENDER_CODE_TEXT_RATIO)
+                setTextColor(textColor)
+                text = if (showSenderCode) message.senderPhoneNumber else ""
+                beVisibleIf(showSenderCode)
             }
 
             if (message.attachment?.attachments?.isNotEmpty() == true) {
