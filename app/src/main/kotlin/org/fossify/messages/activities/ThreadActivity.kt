@@ -882,13 +882,25 @@ class ThreadActivity : SimpleActivity() {
         }
     }
 
+    // jumps straight to the result instead of animating through every message in between
+    private fun jumpToItem(index: Int) {
+        if (index < 0) return
+        val layoutManager = binding.threadMessagesList.layoutManager as LinearLayoutManager
+        val firstCompletelyVisible = layoutManager.findFirstCompletelyVisibleItemPosition()
+        val lastCompletelyVisible = layoutManager.findLastCompletelyVisibleItemPosition()
+        if (index in firstCompletelyVisible..lastCompletelyVisible) {
+            return // already fully on screen, no need to move
+        }
+        binding.threadMessagesList.scrollToPosition(index)
+    }
+
     private fun focusGroupedSearchMatch(index: Int) {
         val matchId = groupedSearchMatchIds.getOrNull(index) ?: return
         getOrCreateThreadAdapter().setSearchHighlight(groupedSearchQuery, matchId)
         updateGroupedSearchCount()
         val itemIndex = threadItems.indexOfFirst { (it as? Message)?.id == matchId }
         if (itemIndex != -1) {
-            binding.threadMessagesList.smoothScrollToPosition(itemIndex)
+            jumpToItem(itemIndex)
         } else {
             // the match is in older, not yet loaded messages
             jumpToMessage(matchId)
@@ -920,7 +932,7 @@ class ThreadActivity : SimpleActivity() {
     private fun jumpToMessage(messageId: Long) {
         if (messages.any { it.id == messageId }) {
             val index = threadItems.indexOfFirst { (it as? Message)?.id == messageId }
-            if (index != -1) binding.threadMessagesList.smoothScrollToPosition(index)
+            if (index != -1) jumpToItem(index)
             return
         }
 
@@ -948,7 +960,7 @@ class ThreadActivity : SimpleActivity() {
                 loadingOlderMessages = false
                 val index = latestThreadItems.indexOfFirst { (it as? Message)?.id == messageId }
                 getOrCreateThreadAdapter().updateMessages(
-                    newMessages = latestThreadItems, scrollPosition = index, smoothScroll = true
+                    newMessages = latestThreadItems, scrollPosition = index
                 )
                 isJumpingToMessage = false
             }
