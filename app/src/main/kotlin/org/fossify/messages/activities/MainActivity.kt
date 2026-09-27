@@ -73,9 +73,12 @@ import org.fossify.messages.models.Conversation
 import org.fossify.messages.models.Events
 import org.fossify.messages.models.Message
 import org.fossify.messages.models.SearchResult
+import org.fossify.messages.models.SenderGroup
 import org.greenrobot.eventbus.EventBus
 import org.greenrobot.eventbus.Subscribe
 import org.greenrobot.eventbus.ThreadMode
+
+private val WORD_SEPARATOR_REGEX = Regex("[^\\p{L}\\p{N}]+")
 
 class MainActivity : SimpleActivity() {
     override var isSearchBarEnabled = true
@@ -601,7 +604,7 @@ class MainActivity : SimpleActivity() {
                 val messages = messagesDB.getMessagesWithText(searchQuery)
                 val conversations = conversationsDB.getConversationsWithText(searchQuery)
                 if (text == lastSearchedText) {
-                    showSearchResults(messages, conversations, text)
+                    showSearchResults(buildSearchResults(messages, conversations, text), text)
                 }
             }
         } else {
@@ -610,30 +613,43 @@ class MainActivity : SimpleActivity() {
         }
     }
 
-    private fun showSearchResults(
+    /**
+     * Builds the search results in tiers: sender groups whose name matches the query
+     * come first, then the other individual senders, and finally the matching messages.
+     */
+    private fun buildSearchResults(
         messages: List<Message>,
         conversations: List<Conversation>,
         searchedText: String,
-    ) {
+    ): ArrayList<SearchResult> {
         val searchResults = ArrayList<SearchResult>()
-        conversations.forEach { conversation ->
-            val date = (conversation.date * 1000L).formatDateOrTime(
-                context = this,
-                hideTimeOnOtherDays = true,
-                showCurrentYear = true
-            )
+        val shownGroups = findMatchingSenderGroups(searchedText)
 
-            val searchResult = SearchResult(
-                messageId = -1,
-                title = conversation.title,
-                snippet = conversation.phoneNumber,
-                date = date,
-                threadId = conversation.threadId,
-                photoUri = conversation.photoUri
-            )
-            searchResults.add(searchResult)
+        shownGroups.forEach { shownGroup ->
+            val conversation = shownGroup.conversation
+            searchResults.add(conversation.toSearchResult(conversation.snippet))
         }
 
+        // individual senders already covered by a shown group would only be duplicates
+        val coveredAddresses = shownGroups
+            .flatMap { it.group.addresses }
+            .map { it.trim().uppercase() }
+            .toSet()
+        val coveredThreadIds = shownGroups
+            .flatMap { it.group.threadIds + it.conversation.threadId }
+            .toSet()
+
+        // then the other individual senders, newest first
+        conversations.sortedByDescending { it.date }
+            .filterNot {
+                coveredThreadIds.contains(it.threadId) ||
+                    coveredAddresses.contains(it.phoneNumber.trim().uppercase())
+            }
+            .forEach { conversation ->
+                searchResults.add(conversation.toSearchResult(conversation.phoneNumber))
+            }
+
+        // and finally the messages themselves, newest first
         messages.sortedByDescending { it.id }.forEach { message ->
             var recipient = message.senderName
             if (recipient.isEmpty() && message.participants.isNotEmpty()) {
@@ -647,17 +663,112 @@ class MainActivity : SimpleActivity() {
                 showCurrentYear = true
             )
 
-            val searchResult = SearchResult(
-                messageId = message.id,
-                title = recipient,
-                snippet = message.body,
-                date = date,
-                threadId = message.threadId,
-                photoUri = message.senderPhotoUri
+            searchResults.add(
+                SearchResult(
+                    messageId = message.id,
+                    title = recipient,
+                    snippet = message.body,
+                    date = date,
+                    threadId = message.threadId,
+                    photoUri = message.senderPhotoUri
+                )
             )
-            searchResults.add(searchResult)
         }
 
+        return searchResults
+    }
+
+    /**
+     * Sender groups whose name matches [text], the closest matches first. The conversation
+     * cache is only touched when at least one group name matches at all.
+     */
+    private fun findMatchingSenderGroups(text: String): List<MatchedSenderGroup> {
+        val matchedGroups = config.senderGroups.mapNotNull { group ->
+            val match = senderGroupMatchScore(group.title, text) ?: return@mapNotNull null
+            group to match
+        }
+        if (matchedGroups.isEmpty()) {
+            return emptyList()
+        }
+
+        val cachedConversations = getGroupedConversationsFromCache()
+        return matchedGroups.mapNotNull { (group, match) ->
+            val conversation = cachedConversations.find {
+                !it.isGroupConversation && it.isPartOfSenderGroup(group)
+            } ?: return@mapNotNull null
+            MatchedSenderGroup(group = group, conversation = conversation, match = match)
+        }.sortedWith(
+            compareBy<MatchedSenderGroup> { it.match }
+                .thenByDescending { it.conversation.date }
+        )
+    }
+
+    private fun Conversation.isPartOfSenderGroup(group: SenderGroup): Boolean {
+        val address = phoneNumber.trim().uppercase()
+        return group.addresses.any { it.trim().uppercase() == address } ||
+            group.threadIds.contains(threadId)
+    }
+
+    /**
+     * Ranks how closely [title] matches [query], with stronger matches sorting first.
+     * Separators are ignored in some ranks so "hdfc bank" still matches "HDFC-BANK".
+     */
+    private fun senderGroupMatchScore(title: String, query: String): SenderGroupMatch? {
+        val lowerTitle = title.lowercase()
+        val lowerQuery = query.trim().lowercase()
+        val compactTitle = lowerTitle.filter { it.isLetterOrDigit() }
+        val compactQuery = lowerQuery.filter { it.isLetterOrDigit() }
+        if (lowerQuery.isEmpty() || compactQuery.isEmpty()) {
+            return null
+        }
+
+        val titleWords = lowerTitle.split(WORD_SEPARATOR_REGEX).filter { it.isNotEmpty() }
+        val queryWords = lowerQuery.split(WORD_SEPARATOR_REGEX).filter { it.isNotEmpty() }
+        return when {
+            lowerTitle == lowerQuery -> SenderGroupMatch.EXACT
+            compactTitle == compactQuery -> SenderGroupMatch.EXACT_IGNORE_SEPARATORS
+            lowerTitle.startsWith(lowerQuery) -> SenderGroupMatch.PREFIX
+            compactTitle.startsWith(compactQuery) -> SenderGroupMatch.PREFIX_IGNORE_SEPARATORS
+            lowerTitle.contains(lowerQuery) -> SenderGroupMatch.CONTAINS
+            compactTitle.contains(compactQuery) -> SenderGroupMatch.CONTAINS_IGNORE_SEPARATORS
+            queryWords.all { word -> titleWords.any { it.startsWith(word) } } ->
+                SenderGroupMatch.WORD_PREFIXES
+
+            else -> null
+        }
+    }
+
+    private fun Conversation.toSearchResult(snippet: String) = SearchResult(
+        messageId = -1,
+        title = title,
+        snippet = snippet,
+        date = (date * 1000L).formatDateOrTime(
+            context = this@MainActivity,
+            hideTimeOnOtherDays = true,
+            showCurrentYear = true
+        ),
+        threadId = threadId,
+        photoUri = photoUri
+    )
+
+    /** How closely a sender group name matches the search query, stronger matches first. */
+    private enum class SenderGroupMatch {
+        EXACT,
+        EXACT_IGNORE_SEPARATORS,
+        PREFIX,
+        PREFIX_IGNORE_SEPARATORS,
+        CONTAINS,
+        CONTAINS_IGNORE_SEPARATORS,
+        WORD_PREFIXES,
+    }
+
+    private data class MatchedSenderGroup(
+        val group: SenderGroup,
+        val conversation: Conversation,
+        val match: SenderGroupMatch,
+    )
+
+    private fun showSearchResults(searchResults: ArrayList<SearchResult>, searchedText: String) {
         runOnUiThread {
             binding.searchResultsList.beVisibleIf(searchResults.isNotEmpty())
             binding.searchPlaceholder.beVisibleIf(searchResults.isEmpty())
