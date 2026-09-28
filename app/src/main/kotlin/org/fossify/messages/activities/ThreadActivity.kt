@@ -717,7 +717,8 @@ class ThreadActivity : SimpleActivity() {
     private fun scrollToBottom() {
         val position = getOrCreateThreadAdapter().currentList.lastIndex
         if (position >= 0) {
-            binding.threadMessagesList.smoothScrollToPosition(position)
+            // jump straight down instead of animating through every message in between
+            jumpToItem(position)
         }
     }
 
