@@ -255,7 +255,7 @@ class ConversationsAdapter(
             activity.config.findSenderGroupByAddress(conversation.phoneNumber)?.addresses
                 ?: listOf(conversation.phoneNumber)
         }.distinct()
-        activity.launchSenderPicker(addresses)
+        activity.launchSenderPicker(addresses, seedAddress = selectedItems.first().phoneNumber)
         finishActMode()
     }
 

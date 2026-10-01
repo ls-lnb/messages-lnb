@@ -63,6 +63,7 @@ import org.fossify.commons.extensions.beVisibleIf
 import org.fossify.commons.extensions.copyToClipboard
 import org.fossify.commons.extensions.darkenColor
 import org.fossify.commons.extensions.formatDate
+import org.fossify.commons.extensions.getAlertDialogBuilder
 import org.fossify.commons.extensions.getBottomNavigationBackgroundColor
 import org.fossify.commons.extensions.getContrastColor
 import org.fossify.commons.extensions.getFilenameFromPath
@@ -112,7 +113,6 @@ import org.fossify.messages.adapters.ThreadAdapter
 import org.fossify.messages.databinding.ActivityThreadBinding
 import org.fossify.messages.databinding.ItemSelectedContactBinding
 import org.fossify.messages.dialogs.GroupMessageSendDialog
-import org.fossify.messages.dialogs.GroupedSendersDialog
 import org.fossify.messages.dialogs.InvalidNumberDialog
 import org.fossify.messages.dialogs.RenameConversationDialog
 import org.fossify.messages.dialogs.ScheduleMessageDialog
@@ -152,9 +152,9 @@ import org.fossify.messages.extensions.onScroll
 import org.fossify.messages.extensions.removeDiacriticsIfNeeded
 import org.fossify.messages.extensions.removeSenderGroupsForConversations
 import org.fossify.messages.extensions.renameConversation
-import org.fossify.messages.extensions.similarShortCodeKey
 import org.fossify.messages.extensions.restoreAllMessagesFromRecycleBinForConversation
 import org.fossify.messages.extensions.restoreMessageFromRecycleBin
+import org.fossify.messages.extensions.saveSenderGroupFromSelection
 import org.fossify.messages.extensions.saveSmsDraft
 import org.fossify.messages.extensions.searchSmsIdsInThreads
 import org.fossify.messages.extensions.shouldUnarchive
@@ -391,9 +391,8 @@ class ThreadActivity : SimpleActivity() {
             } else {
                 getString(R.string.group_senders)
             }
-            findItem(R.id.add_similar_senders).isVisible =
-                isGroupableShortCode && conversation?.phoneNumber?.similarShortCodeKey() != null
-            findItem(R.id.show_grouped_senders).isVisible = isSenderGroup && !isRecycleBin
+            findItem(R.id.add_to_group).isVisible =
+                isGroupableShortCode && !isSenderGroup && config.senderGroups.isNotEmpty()
             findItem(R.id.search_grouped_messages).isVisible = isSenderGroup && !isRecycleBin
             findItem(R.id.ungroup_senders).isVisible = isSenderGroup && !isRecycleBin
             findItem(R.id.conversation_details).isVisible = conversation != null && !isRecycleBin
@@ -428,9 +427,8 @@ class ThreadActivity : SimpleActivity() {
             R.id.archive -> archiveConversation()
             R.id.unarchive -> unarchiveConversation()
             R.id.rename_conversation -> renameConversation()
-            R.id.group_senders -> openSenderPicker(suggestSimilar = false)
-            R.id.add_similar_senders -> openSenderPicker(suggestSimilar = true)
-            R.id.show_grouped_senders -> showGroupedSenders()
+            R.id.group_senders -> openSenderPicker()
+            R.id.add_to_group -> showAddToGroupDialog()
             R.id.search_grouped_messages -> openGroupedSearch()
             R.id.ungroup_senders -> askConfirmUngroupSenders()
             R.id.conversation_details -> launchConversationDetails(threadId)
@@ -1495,16 +1493,39 @@ class ThreadActivity : SimpleActivity() {
         }
     }
 
-    private fun openSenderPicker(suggestSimilar: Boolean) {
+    private fun openSenderPicker() {
         val address = conversation?.phoneNumber ?: return
         val preselected = config.findSenderGroupByAddress(address)?.addresses ?: listOf(address)
-        launchSenderPicker(preselected, suggestSimilar = suggestSimilar)
+        launchSenderPicker(preselected, seedAddress = address)
     }
 
-    private fun showGroupedSenders() {
+    // quick way to put a single short-code sender into an existing group
+    private fun showAddToGroupDialog() {
         val address = conversation?.phoneNumber ?: return
-        val group = config.findSenderGroupByAddress(address) ?: return
-        GroupedSendersDialog(this, group.addresses.sorted())
+        val senderGroups = config.senderGroups
+        if (senderGroups.isEmpty()) {
+            return
+        }
+
+        val titles = senderGroups.map { it.title }.toTypedArray()
+        getAlertDialogBuilder()
+            .setTitle(R.string.add_to_group)
+            .setItems(titles) { _, which ->
+                val group = senderGroups[which]
+                ensureBackgroundThread {
+                    saveSenderGroupFromSelection(
+                        addresses = group.addresses + address,
+                        title = group.title,
+                        preferredGroupId = group.id,
+                    )
+                    runOnUiThread {
+                        toast(getString(R.string.added_to_group, group.title))
+                        refreshConversations(cacheOnly = true)
+                        refreshMenuItems()
+                    }
+                }
+            }
+            .show()
     }
 
     private fun askConfirmUngroupSenders() {

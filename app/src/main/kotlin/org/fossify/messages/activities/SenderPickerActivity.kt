@@ -1,6 +1,7 @@
 package org.fossify.messages.activities
 
 import android.os.Bundle
+import com.google.android.material.tabs.TabLayout
 import org.fossify.commons.extensions.beVisibleIf
 import org.fossify.commons.extensions.getProperPrimaryColor
 import org.fossify.commons.extensions.hideKeyboard
@@ -19,17 +20,22 @@ import org.fossify.messages.extensions.getShortCodeSenderAddresses
 import org.fossify.messages.extensions.saveSenderGroupFromSelection
 import org.fossify.messages.extensions.similarShortCodeKey
 import org.fossify.messages.helpers.PRESELECTED_SENDER_ADDRESSES
-import org.fossify.messages.helpers.SUGGEST_SIMILAR_SENDERS
+import org.fossify.messages.helpers.SIMILAR_SEED_ADDRESS
 import org.fossify.messages.helpers.refreshConversations
 import org.fossify.messages.models.ShortCodeSender
 
 class SenderPickerActivity : SimpleActivity() {
     private val binding by viewBinding(ActivitySenderPickerBinding::inflate)
     private val selectedAddresses = HashSet<String>()
+
+    // senders that belong to the group being created/edited, shown in the grouped tab
+    private val memberAddresses = HashSet<String>()
     private var allSenders = ArrayList<ShortCodeSender>()
     private var groupTitles = emptyMap<String, String>()
     private var adapter: SenderPickerAdapter? = null
     private var currentQuery = ""
+    private var similarKey: String? = null
+    private var currentTab = TAB_SEARCH_SENDERS
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -43,12 +49,38 @@ class SenderPickerActivity : SimpleActivity() {
 
         intent.getStringArrayListExtra(PRESELECTED_SENDER_ADDRESSES)
             ?.map { it.uppercase() }
-            ?.let { selectedAddresses.addAll(it) }
+            ?.let {
+                selectedAddresses.addAll(it)
+                memberAddresses.addAll(it)
+            }
+        similarKey = intent.getStringExtra(SIMILAR_SEED_ADDRESS)?.similarShortCodeKey()
+
+        // show the group name in the header when editing an existing group
+        memberAddresses.firstNotNullOfOrNull { config.findSenderGroupByAddress(it) }?.let { group ->
+            binding.senderPickerToolbar.title = group.title
+        }
 
         binding.senderPickerSearch.onTextChangeListener { text ->
             currentQuery = text
             showFilteredSenders()
         }
+
+        binding.senderPickerTabs.addTab(
+            binding.senderPickerTabs.newTab().setText(R.string.search_senders)
+        )
+        binding.senderPickerTabs.addTab(
+            binding.senderPickerTabs.newTab().setText(R.string.grouped_senders)
+        )
+        binding.senderPickerTabs.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
+            override fun onTabSelected(tab: TabLayout.Tab) {
+                currentTab = tab.position
+                showFilteredSenders()
+            }
+
+            override fun onTabUnselected(tab: TabLayout.Tab) = Unit
+
+            override fun onTabReselected(tab: TabLayout.Tab) = Unit
+        })
 
         updateSelectedCount()
         loadSenders()
@@ -98,32 +130,10 @@ class SenderPickerActivity : SimpleActivity() {
                     }.thenBy { it.address.uppercase() }
                 )
 
-            val titles = HashMap<String, String>()
-            config.senderGroups.forEach { group ->
-                group.addresses.forEach { address ->
-                    titles[address.uppercase()] = group.title
-                }
-            }
-
-            val suggestSimilar = intent.getBooleanExtra(SUGGEST_SIMILAR_SENDERS, false)
-            if (suggestSimilar) {
-                val seed = selectedAddresses.firstOrNull()
-                    ?: senders.firstOrNull()?.address?.uppercase()
-                val key = seed?.similarShortCodeKey()
-                if (key != null) {
-                    senders
-                        .filter { it.address.similarShortCodeKey() == key }
-                        .forEach { selectedAddresses.add(it.address.uppercase()) }
-                }
-            }
-
             runOnUiThread {
                 binding.senderPickerProgress.hide()
                 allSenders = ArrayList(senders)
-                groupTitles = titles
-                if (suggestSimilar && selectedAddresses.size < 2) {
-                    toast(R.string.no_similar_senders)
-                }
+                groupTitles = buildGroupTitles()
                 setupAdapter()
                 showFilteredSenders()
                 updateSelectedCount()
@@ -142,19 +152,36 @@ class SenderPickerActivity : SimpleActivity() {
     }
 
     private fun showFilteredSenders() {
-        val query = currentQuery.trim()
-        val filtered = if (query.isEmpty()) {
-            allSenders
-        } else {
-            val needle = query.uppercase()
-            ArrayList(
-                allSenders.filter {
-                    it.address.uppercase().contains(needle) ||
-                        it.snippet.uppercase().contains(needle) ||
-                        groupTitles[it.address.uppercase()].orEmpty().uppercase().contains(needle)
+        val inGroupTab = currentTab == TAB_GROUPED_SENDERS
+        val source = if (inGroupTab) {
+            memberAddresses
+                .map { address ->
+                    allSenders.find { it.address.uppercase() == address }
+                        ?: ShortCodeSender(address = address)
                 }
-            )
+                .sortedWith(
+                    compareBy<ShortCodeSender> { it.address.similarShortCodeKey() ?: it.address.uppercase() }
+                        .thenBy { it.address.uppercase() }
+                )
+        } else {
+            allSenders
+                .filterNot { memberAddresses.contains(it.address.uppercase()) }
+                // senders similar to the one the picker was opened from float to the top
+                .sortedBy { if (similarKey != null && it.address.similarShortCodeKey() == similarKey) 0 else 1 }
         }
+
+        val query = currentQuery.trim().uppercase()
+        val filtered = ArrayList(
+            source.filter {
+                query.isEmpty() ||
+                    it.address.uppercase().contains(query) ||
+                    it.snippet.uppercase().contains(query) ||
+                    groupTitles[it.address.uppercase()].orEmpty().uppercase().contains(query)
+            }
+        )
+
+        // the grouped tab shows message snippets instead of repeating the group name
+        adapter?.groupTitles = if (inGroupTab) emptyMap() else groupTitles
         adapter?.senders = filtered
         binding.senderPickerPlaceholder.beVisibleIf(filtered.isEmpty())
         binding.senderPickerList.beVisibleIf(filtered.isNotEmpty())
@@ -174,31 +201,60 @@ class SenderPickerActivity : SimpleActivity() {
 
     private fun confirmSelection() {
         hideKeyboard()
-        val selectedSenders = allSenders.filter {
-            selectedAddresses.contains(it.address.uppercase())
-        }
-        if (selectedSenders.size < 2) {
+        if (selectedAddresses.size < 2) {
             toast(R.string.select_at_least_two_senders)
             return
         }
 
-        val overlappingGroups = selectedSenders.mapNotNull {
-            config.findSenderGroupByAddress(it.address)
-        }.distinctBy { it.id }
-        val similarKey = selectedSenders.first().address.similarShortCodeKey()
-        val prefilledName = overlappingGroups.singleOrNull()?.title
-            ?: similarKey
-            ?: selectedSenders.first().address
-
-        GroupSendersDialog(this, prefilledName) { name ->
-            binding.senderPickerProgress.show()
-            ensureBackgroundThread {
-                saveSenderGroupFromSelection(selectedSenders.map { it.address }, name)
-                runOnUiThread {
-                    refreshConversations(cacheOnly = true)
-                    finish()
-                }
+        // the group being edited: any group the current members belong to
+        val anchorGroup = memberAddresses.firstNotNullOfOrNull { address ->
+            config.findSenderGroupByAddress(address)
+        }
+        if (anchorGroup != null) {
+            applySelection(title = anchorGroup.title, preferredGroupId = anchorGroup.id)
+        } else {
+            val prefilledName = similarKey ?: selectedAddresses.first()
+            GroupSendersDialog(this, prefilledName) { name ->
+                applySelection(title = name, preferredGroupId = null)
             }
         }
+    }
+
+    // applies the checkbox state; checked senders move into the grouped tab, unchecked ones out
+    private fun applySelection(title: String, preferredGroupId: String?) {
+        binding.senderPickerProgress.show()
+        ensureBackgroundThread {
+            saveSenderGroupFromSelection(
+                addresses = selectedAddresses.toList(),
+                title = title,
+                preferredGroupId = preferredGroupId,
+            )
+            runOnUiThread {
+                binding.senderPickerProgress.hide()
+                binding.senderPickerToolbar.title = title
+                memberAddresses.clear()
+                memberAddresses.addAll(selectedAddresses)
+                groupTitles = buildGroupTitles()
+                toast(R.string.sender_group_saved)
+                refreshConversations(cacheOnly = true)
+                showFilteredSenders()
+                updateSelectedCount()
+            }
+        }
+    }
+
+    private fun buildGroupTitles(): Map<String, String> {
+        val titles = HashMap<String, String>()
+        config.senderGroups.forEach { group ->
+            group.addresses.forEach { address ->
+                titles[address.uppercase()] = group.title
+            }
+        }
+        return titles
+    }
+
+    private companion object {
+        const val TAB_SEARCH_SENDERS = 0
+        const val TAB_GROUPED_SENDERS = 1
     }
 }
