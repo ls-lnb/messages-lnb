@@ -44,11 +44,6 @@
         android:title="@string/add_to_group"
         app:showAsAction="never" />
     <item
-        android:id="@+id/show_grouped_senders"
-        android:showAsAction="never"
-        android:title="@string/show_grouped_senders"
-        app:showAsAction="never" />
-    <item
         android:id="@+id/ungroup_senders"
         android:showAsAction="never"
         android:title="@string/ungroup_senders"

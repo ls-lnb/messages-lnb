@@ -113,7 +113,6 @@ import org.fossify.messages.adapters.ThreadAdapter
 import org.fossify.messages.databinding.ActivityThreadBinding
 import org.fossify.messages.databinding.ItemSelectedContactBinding
 import org.fossify.messages.dialogs.GroupMessageSendDialog
-import org.fossify.messages.dialogs.GroupedSendersDialog
 import org.fossify.messages.dialogs.InvalidNumberDialog
 import org.fossify.messages.dialogs.RenameConversationDialog
 import org.fossify.messages.dialogs.ScheduleMessageDialog
@@ -394,7 +393,6 @@ class ThreadActivity : SimpleActivity() {
             }
             findItem(R.id.add_to_group).isVisible =
                 isGroupableShortCode && !isSenderGroup && config.senderGroups.isNotEmpty()
-            findItem(R.id.show_grouped_senders).isVisible = isSenderGroup && !isRecycleBin
             findItem(R.id.search_grouped_messages).isVisible = isSenderGroup && !isRecycleBin
             findItem(R.id.ungroup_senders).isVisible = isSenderGroup && !isRecycleBin
             findItem(R.id.conversation_details).isVisible = conversation != null && !isRecycleBin
@@ -431,7 +429,6 @@ class ThreadActivity : SimpleActivity() {
             R.id.rename_conversation -> renameConversation()
             R.id.group_senders -> openSenderPicker()
             R.id.add_to_group -> showAddToGroupDialog()
-            R.id.show_grouped_senders -> showGroupedSenders()
             R.id.search_grouped_messages -> openGroupedSearch()
             R.id.ungroup_senders -> askConfirmUngroupSenders()
             R.id.conversation_details -> launchConversationDetails(threadId)
@@ -1529,12 +1526,6 @@ class ThreadActivity : SimpleActivity() {
                 }
             }
             .show()
-    }
-
-    private fun showGroupedSenders() {
-        val address = conversation?.phoneNumber ?: return
-        val group = config.findSenderGroupByAddress(address) ?: return
-        GroupedSendersDialog(this, group.addresses.sorted())
     }
 
     private fun askConfirmUngroupSenders() {

@@ -38,7 +38,6 @@
     <string name="rename_conversation_warning">Only you can see this conversation name</string>
     <string name="group_senders">Group senders</string>
     <string name="ungroup_senders">Ungroup senders</string>
-    <string name="show_grouped_senders">Show grouped senders</string>
     <string name="grouped_senders">Grouped senders</string>
     <string name="edit_grouped_senders">Edit grouped senders</string>
     <string name="add_to_group">Add to group</string>

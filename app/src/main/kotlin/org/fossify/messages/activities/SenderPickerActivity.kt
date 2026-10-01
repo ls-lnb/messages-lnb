@@ -55,6 +55,11 @@ class SenderPickerActivity : SimpleActivity() {
             }
         similarKey = intent.getStringExtra(SIMILAR_SEED_ADDRESS)?.similarShortCodeKey()
 
+        // show the group name in the header when editing an existing group
+        memberAddresses.firstNotNullOfOrNull { config.findSenderGroupByAddress(it) }?.let { group ->
+            binding.senderPickerToolbar.title = group.title
+        }
+
         binding.senderPickerSearch.onTextChangeListener { text ->
             currentQuery = text
             showFilteredSenders()
@@ -226,6 +231,7 @@ class SenderPickerActivity : SimpleActivity() {
             )
             runOnUiThread {
                 binding.senderPickerProgress.hide()
+                binding.senderPickerToolbar.title = title
                 memberAddresses.clear()
                 memberAddresses.addAll(selectedAddresses)
                 groupTitles = buildGroupTitles()
