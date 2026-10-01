@@ -15,7 +15,7 @@ import org.fossify.messages.models.ShortCodeSender
 class SenderPickerAdapter(
     private val activity: SimpleActivity,
     private val selectedAddresses: HashSet<String>,
-    private val groupTitles: Map<String, String>,
+    var groupTitles: Map<String, String>,
     private val onSelectionChanged: () -> Unit,
 ) : RecyclerView.Adapter<SenderPickerAdapter.ViewHolder>() {
     private val textColor = activity.getProperTextColor()

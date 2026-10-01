@@ -711,7 +711,11 @@ fun Context.saveSenderGroupFromSelection(conversations: List<Conversation>, titl
     saveSenderGroupFromSelection(conversations.map { it.phoneNumber }, title)
 }
 
-fun Context.saveSenderGroupFromSelection(addresses: Collection<String>, title: String) {
+fun Context.saveSenderGroupFromSelection(
+    addresses: Collection<String>,
+    title: String,
+    preferredGroupId: String? = null,
+) {
     val selectedAddresses = addresses.map { it.trim() }.filter { it.isNotEmpty() }.distinctBy { it.uppercase() }
     if (selectedAddresses.size < 2) {
         return
@@ -719,8 +723,10 @@ fun Context.saveSenderGroupFromSelection(addresses: Collection<String>, title: S
 
     val selectedSet = selectedAddresses.map { it.uppercase() }.toSet()
     val existing = config.senderGroups
-    val keepId = existing.firstOrNull { group ->
-        group.addresses.any { it.uppercase() in selectedSet }
+    // only adopt an existing group when it is fully part of the selection; a partial
+    // overlap means senders are being moved out of it, so a new group is created instead
+    val keepId = preferredGroupId ?: existing.firstOrNull { group ->
+        group.addresses.all { it.uppercase() in selectedSet }
     }?.id ?: UUID.randomUUID().toString()
 
     val rewritten = existing.mapNotNull { group ->

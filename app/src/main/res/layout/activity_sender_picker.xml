@@ -27,10 +27,17 @@
         android:layout_height="match_parent"
         app:layout_behavior="@string/appbar_scrolling_view_behavior">
 
+        <com.google.android.material.tabs.TabLayout
+            android:id="@+id/sender_picker_tabs"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            app:tabMode="fixed" />
+
         <org.fossify.commons.views.MyEditText
             android:id="@+id/sender_picker_search"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_below="@id/sender_picker_tabs"
             android:layout_marginStart="@dimen/activity_margin"
             android:layout_marginEnd="@dimen/activity_margin"
             android:background="@android:color/transparent"

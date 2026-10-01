@@ -22,7 +22,7 @@ import org.fossify.commons.models.SimpleContact
 import org.fossify.messages.activities.ConversationDetailsActivity
 import org.fossify.messages.activities.SenderPickerActivity
 import org.fossify.messages.helpers.PRESELECTED_SENDER_ADDRESSES
-import org.fossify.messages.helpers.SUGGEST_SIMILAR_SENDERS
+import org.fossify.messages.helpers.SIMILAR_SEED_ADDRESS
 import org.fossify.messages.helpers.THREAD_ID
 import java.util.Locale
 
@@ -122,14 +122,14 @@ fun Activity.launchConversationDetails(threadId: Long) {
 
 fun Activity.launchSenderPicker(
     preselectedAddresses: Collection<String>,
-    suggestSimilar: Boolean = false,
+    seedAddress: String? = null,
 ) {
     Intent(this, SenderPickerActivity::class.java).apply {
         putStringArrayListExtra(
             PRESELECTED_SENDER_ADDRESSES,
             ArrayList(preselectedAddresses.map { it.uppercase() })
         )
-        putExtra(SUGGEST_SIMILAR_SENDERS, suggestSimilar)
+        putExtra(SIMILAR_SEED_ADDRESS, seedAddress)
         startActivity(this)
     }
 }
