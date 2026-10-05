@@ -7,11 +7,11 @@ import android.view.ViewGroup
 import com.bumptech.glide.Glide
 import org.fossify.commons.adapters.MyRecyclerViewAdapter
 import org.fossify.commons.extensions.getTextSize
-import org.fossify.commons.extensions.highlightTextPart
 import org.fossify.commons.helpers.SimpleContactsHelper
 import org.fossify.commons.views.MyRecyclerView
 import org.fossify.messages.activities.SimpleActivity
 import org.fossify.messages.databinding.ItemSearchResultBinding
+import org.fossify.messages.extensions.highlightSearchMatches
 import org.fossify.messages.models.SearchResult
 
 class SearchResultsAdapter(
@@ -68,13 +68,13 @@ class SearchResultsAdapter(
     private fun setupView(view: View, searchResult: SearchResult) {
         ItemSearchResultBinding.bind(view).apply {
             searchResultTitle.apply {
-                text = searchResult.title.highlightTextPart(textToHighlight, properPrimaryColor)
+                text = searchResult.title.highlightSearchMatches(textToHighlight)
                 setTextColor(textColor)
                 setTextSize(TypedValue.COMPLEX_UNIT_PX, fontSize * 1.2f)
             }
 
             searchResultSnippet.apply {
-                text = searchResult.snippet.highlightTextPart(textToHighlight, properPrimaryColor)
+                text = searchResult.snippet.highlightSearchMatches(textToHighlight)
                 setTextColor(textColor)
                 setTextSize(TypedValue.COMPLEX_UNIT_PX, fontSize * 0.9f)
             }

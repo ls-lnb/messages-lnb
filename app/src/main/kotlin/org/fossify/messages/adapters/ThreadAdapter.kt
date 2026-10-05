@@ -39,7 +39,6 @@ import org.fossify.commons.extensions.formatDateOrTime
 import org.fossify.commons.extensions.getContrastColor
 import org.fossify.commons.extensions.getProperPrimaryColor
 import org.fossify.commons.extensions.getTextSize
-import org.fossify.commons.extensions.highlightTextPart
 import org.fossify.commons.extensions.getTimeFormat
 import org.fossify.commons.extensions.shareTextIntent
 import org.fossify.commons.extensions.showErrorToast
@@ -66,6 +65,7 @@ import org.fossify.messages.dialogs.MessageDetailsDialog
 import org.fossify.messages.dialogs.SelectTextDialog
 import org.fossify.messages.extensions.config
 import org.fossify.messages.extensions.getContactFromAddress
+import org.fossify.messages.extensions.highlightSearchMatches
 import org.fossify.messages.extensions.isImageMimeType
 import org.fossify.messages.extensions.isVCardMimeType
 import org.fossify.messages.extensions.isVideoMimeType
@@ -378,11 +378,7 @@ class ThreadAdapter(
         ItemMessageBinding.bind(view).apply {
             threadMessageHolder.isSelected = selectedKeys.contains(message.getSelectionKey())
             threadMessageBody.apply {
-                text = if (searchQuery.isNotEmpty() && message.body.contains(searchQuery, true)) {
-                    message.body.highlightTextPart(searchQuery, properPrimaryColor)
-                } else {
-                    message.body
-                }
+                text = message.body.highlightSearchMatches(searchQuery)
                 alpha = if (highlightedMessageId != -1L && message.id == highlightedMessageId) 1f else {
                     if (searchQuery.isNotEmpty()) 0.85f else 1f
                 }
