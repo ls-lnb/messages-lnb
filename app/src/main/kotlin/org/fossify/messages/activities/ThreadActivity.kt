@@ -82,7 +82,6 @@ import org.fossify.commons.extensions.isVisible
 import org.fossify.commons.extensions.launchActivityIntent
 import org.fossify.commons.extensions.maybeShowNumberPickerDialog
 import org.fossify.commons.extensions.normalizeString
-import org.fossify.commons.extensions.notificationManager
 import org.fossify.commons.extensions.onTextChangeListener
 import org.fossify.commons.extensions.openRequestExactAlarmSettings
 import org.fossify.commons.extensions.realScreenSize
@@ -185,6 +184,7 @@ import org.fossify.messages.helpers.THREAD_ID
 import org.fossify.messages.helpers.THREAD_NUMBER
 import org.fossify.messages.helpers.THREAD_TEXT
 import org.fossify.messages.helpers.THREAD_TITLE
+import org.fossify.messages.helpers.cancelNotificationsFor
 import org.fossify.messages.helpers.generateRandomId
 import org.fossify.messages.helpers.refreshConversations
 import org.fossify.messages.helpers.requestTelephonySyncProgress
@@ -301,7 +301,7 @@ class ThreadActivity : SimpleActivity() {
 
         isActivityVisible = true
 
-        notificationManager.cancel(threadId.hashCode())
+        cancelNotificationsFor(threadId)
 
         ensureBackgroundThread {
             val newConv = conversationsDB.getConversationWithThreadId(threadId)
@@ -1240,7 +1240,8 @@ class ThreadActivity : SimpleActivity() {
     }
 
     private fun setupThreadTitle() {
-        val title = conversation?.title
+        val groupTitle = conversation?.let { config.findSenderGroupByAddress(it.phoneNumber)?.title }
+        val title = groupTitle ?: conversation?.title
         binding.threadToolbar.title = if (!title.isNullOrEmpty()) {
             title
         } else {
@@ -1532,6 +1533,7 @@ class ThreadActivity : SimpleActivity() {
         val currentConversation = conversation ?: return
         ConfirmationDialog(this, getString(R.string.ungroup_senders_confirmation)) {
             ensureBackgroundThread {
+                cancelNotificationsFor(currentConversation.threadId)
                 removeSenderGroupsForConversations(listOf(currentConversation))
                 runOnUiThread {
                     refreshConversations(cacheOnly = true)
@@ -2095,7 +2097,7 @@ class ThreadActivity : SimpleActivity() {
         allMessagesFetched = false
 
         if (isActivityVisible) {
-            notificationManager.cancel(threadId.hashCode())
+            cancelNotificationsFor(threadId)
         }
 
         val messageSnapshot = messages.toSortedMessages()

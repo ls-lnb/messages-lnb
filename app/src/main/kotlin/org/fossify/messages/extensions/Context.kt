@@ -492,18 +492,41 @@ fun Context.getRelatedGroupedThreadIds(threadId: Long): List<Long> {
         return SenderGrouping.relatedThreadIds(threadId)
     }
 
-    val group = config.findSenderGroupByThreadId(threadId) ?: run {
-        val phoneNumbers = getThreadPhoneNumbers(getThreadRecipientIds(threadId))
-        if (phoneNumbers.size != 1) {
-            return listOf(threadId)
-        }
-        config.findSenderGroupByAddress(phoneNumbers.first())
-    } ?: return listOf(threadId)
-
+    val group = findSenderGroupForThread(threadId) ?: return listOf(threadId)
     val ids = (group.threadIds + getThreadIdsForAddresses(group.addresses) + threadId)
         .distinct()
     SenderGrouping.mergeGroup(ids)
     return ids
+}
+
+/**
+ * Finds the sender group [address] or [threadId] belongs to. Uses only the in-memory config,
+ * so it is safe to call on the message receiving path.
+ */
+fun Context.findSenderGroup(address: String, threadId: Long): SenderGroup? {
+    val groups = config.senderGroups
+    if (groups.isEmpty()) {
+        return null
+    }
+    return groups.firstOrNull { it.containsAddress(address) }
+        ?: groups.firstOrNull { it.containsThreadId(threadId) }
+}
+
+/**
+ * Same as [findSenderGroup], but also resolves the group through the telephony provider when
+ * the group's saved thread ids are stale. Avoid on the message receiving path.
+ */
+fun Context.findSenderGroupForThread(threadId: Long): SenderGroup? {
+    findSenderGroup("", threadId)?.let { return it }
+    if (config.senderGroups.isEmpty()) {
+        return null
+    }
+
+    val phoneNumbers = getThreadPhoneNumbers(getThreadRecipientIds(threadId))
+    if (phoneNumbers.size != 1) {
+        return null
+    }
+    return findSenderGroup(phoneNumbers.first(), threadId)
 }
 
 fun Context.getThreadIdsForAddresses(addresses: Collection<String>): List<Long> {
@@ -757,6 +780,8 @@ fun Context.saveSenderGroupFromSelection(
     )
     SenderGrouping.mergeGroup(threadIds.toList())
     SenderGrouping.pendingUiRefresh = true
+    // stale per-sender notifications would otherwise keep the old sender name in the shade
+    threadIds.forEach { notificationManager.cancel(it.hashCode()) }
 }
 
 fun Context.removeSenderGroupsForConversations(conversations: List<Conversation>) {

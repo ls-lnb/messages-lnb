@@ -14,6 +14,7 @@ import android.media.RingtoneManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.Person
 import androidx.core.app.RemoteInput
+import androidx.core.content.pm.ShortcutInfoCompat
 import org.fossify.commons.extensions.getProperPrimaryColor
 import org.fossify.commons.extensions.notificationManager
 import org.fossify.commons.helpers.SimpleContactsHelper
@@ -21,8 +22,10 @@ import org.fossify.commons.helpers.ensureBackgroundThread
 import org.fossify.messages.R
 import org.fossify.messages.activities.ThreadActivity
 import org.fossify.messages.extensions.config
+import org.fossify.messages.extensions.findSenderGroup
 import org.fossify.messages.extensions.shortcutHelper
 import org.fossify.messages.messaging.isShortCodeWithLetters
+import org.fossify.messages.models.SenderGroup
 import org.fossify.messages.receivers.DeleteSmsReceiver
 import org.fossify.messages.receivers.DirectReplyReceiver
 import org.fossify.messages.receivers.MarkAsReadReceiver
@@ -46,17 +49,21 @@ class NotificationHelper(private val context: Context) {
         sender: String?,
         alertOnlyOnce: Boolean = false
     ) {
+        val group = context.findSenderGroup(address, threadId)
         val hasCustomNotifications =
-            context.config.customNotifications.contains(threadId.toString())
+            group == null && context.config.customNotifications.contains(threadId.toString())
         val notificationChannelId =
             if (hasCustomNotifications) threadId.toString() else NOTIFICATION_CHANNEL_ID
         if (!hasCustomNotifications) {
             createChannel(notificationChannelId, context.getString(R.string.channel_received_sms))
         }
 
-        val notificationId = threadId.hashCode()
+        val notificationId = group?.let { groupNotificationId(it.id) } ?: threadId.hashCode()
         val contentIntent = Intent(context, ThreadActivity::class.java).apply {
             putExtra(THREAD_ID, threadId)
+            if (group != null) {
+                putExtra(THREAD_TITLE, group.title)
+            }
         }
         val contentPendingIntent =
             PendingIntent.getActivity(
@@ -129,11 +136,11 @@ class NotificationHelper(private val context: Context) {
             when (context.config.lockScreenVisibilitySetting) {
                 LOCK_SCREEN_SENDER_MESSAGE -> {
                     setLargeIcon(largeIcon)
-                    setStyle(getMessagesStyle(address, body, notificationId, sender))
+                    setStyle(getMessagesStyle(address, body, notificationId, sender, group?.title))
                 }
 
                 LOCK_SCREEN_SENDER -> {
-                    setContentTitle(sender)
+                    setContentTitle(group?.title ?: sender)
                     setLargeIcon(largeIcon)
                     val summaryText = context.getString(R.string.new_message)
                     setStyle(
@@ -171,20 +178,40 @@ class NotificationHelper(private val context: Context) {
             ).setChannelId(notificationChannelId)
         }
 
-        var shortcut = context.shortcutHelper.getShortcut(threadId)
+        var shortcut = if (group != null) {
+            context.getGroupShortcut(group.id)
+        } else {
+            context.shortcutHelper.getShortcut(threadId)
+        }
         if (shortcut == null) {
             ensureBackgroundThread {
-                shortcut = context.shortcutHelper.createOrUpdateShortcut(threadId)
+                shortcut = createOrUpdateShortcutFor(group, threadId, address)
                 builder.setShortcutInfo(shortcut)
                 notificationManager.notify(notificationId, builder.build())
-                context.shortcutHelper.reportReceiveMessageUsage(threadId)
+                reportReceiveMessageUsageFor(group, threadId, address)
             }
         } else {
             builder.setShortcutInfo(shortcut)
             notificationManager.notify(notificationId, builder.build())
             ensureBackgroundThread {
-                context.shortcutHelper.reportReceiveMessageUsage(threadId)
+                reportReceiveMessageUsageFor(group, threadId, address)
             }
+        }
+    }
+
+    private fun createOrUpdateShortcutFor(group: SenderGroup?, threadId: Long, address: String): ShortcutInfoCompat {
+        return if (group != null) {
+            context.createOrUpdateGroupShortcut(group, threadId, address)
+        } else {
+            context.shortcutHelper.createOrUpdateShortcut(threadId)
+        }
+    }
+
+    private fun reportReceiveMessageUsageFor(group: SenderGroup?, threadId: Long, address: String) {
+        if (group != null) {
+            context.reportGroupReceiveMessageUsage(group, threadId, address)
+        } else {
+            context.shortcutHelper.reportReceiveMessageUsage(threadId)
         }
     }
 
@@ -250,7 +277,8 @@ class NotificationHelper(private val context: Context) {
         address: String,
         body: String,
         notificationId: Int,
-        name: String?
+        name: String?,
+        conversationTitle: String?,
     ): NotificationCompat.MessagingStyle {
         val sender = if (name != null) {
             Person.Builder()
@@ -264,6 +292,9 @@ class NotificationHelper(private val context: Context) {
         return NotificationCompat.MessagingStyle(user).also { style ->
             getOldMessages(notificationId).forEach {
                 style.addMessage(it)
+            }
+            if (conversationTitle != null) {
+                style.setConversationTitle(conversationTitle)
             }
             val newMessage =
                 NotificationCompat.MessagingStyle.Message(body, System.currentTimeMillis(), sender)
@@ -284,4 +315,32 @@ class NotificationHelper(private val context: Context) {
             emptyList()
         }
     }
+}
+
+/**
+ * Stable notification id shared by every sender of [groupId], so their messages accumulate
+ * into a single notification instead of one per sender.
+ */
+fun groupNotificationId(groupId: String): Int = "sender_group_notification:$groupId".hashCode()
+
+/**
+ * Cancels the notification of [threadId] and, when it belongs to a sender group, the shared
+ * group notification plus any leftover per-sender notifications of its other members.
+ */
+fun Context.cancelNotificationsFor(threadId: Long) {
+    val manager = notificationManager
+    manager.cancel(threadId.hashCode())
+    if (config.senderGroups.isEmpty()) {
+        return
+    }
+
+    // config only lookup, this runs on the main thread from onResume
+    val group = findSenderGroup("", threadId) ?: return
+    manager.cancel(groupNotificationId(group.id))
+    val related = if (SenderGrouping.hasMapping(threadId)) {
+        SenderGrouping.relatedThreadIds(threadId)
+    } else {
+        group.threadIds
+    }
+    related.forEach { manager.cancel(it.hashCode()) }
 }
