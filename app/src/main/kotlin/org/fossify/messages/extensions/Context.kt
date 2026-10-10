@@ -61,6 +61,7 @@ import org.fossify.messages.helpers.MessagingCache
 import org.fossify.messages.helpers.NotificationHelper
 import org.fossify.messages.helpers.ShortcutHelper
 import org.fossify.messages.helpers.generateRandomId
+import org.fossify.messages.helpers.groupNotificationId
 import org.fossify.messages.interfaces.AttachmentsDao
 import org.fossify.messages.interfaces.ConversationsDao
 import org.fossify.messages.interfaces.DraftsDao
@@ -495,7 +496,7 @@ fun Context.getRelatedGroupedThreadIds(threadId: Long): List<Long> {
     val group = findSenderGroupForThread(threadId) ?: return listOf(threadId)
     val ids = (group.threadIds + getThreadIdsForAddresses(group.addresses) + threadId)
         .distinct()
-    SenderGrouping.mergeGroup(ids)
+    SenderGrouping.mergeGroup(ids, group.id)
     return ids
 }
 
@@ -637,7 +638,7 @@ private fun Context.groupUserSenderConversations(
     val senderGroups = config.senderGroups
     if (senderGroups.isEmpty()) {
         if (replaceCache) {
-            SenderGrouping.updateGroups(emptyList())
+            updateSenderGroupingCache(emptyMap(), emptyList())
         }
         return conversations
     }
@@ -696,7 +697,7 @@ private fun Context.groupUserSenderConversations(
     }
 
     if (replaceCache) {
-        SenderGrouping.updateGroups(groupThreadIds.values + passthroughIds)
+        updateSenderGroupingCache(groupThreadIds, passthroughIds)
     }
 
     val result = ArrayList<Conversation>(passthrough.size + grouped.size)
@@ -704,6 +705,22 @@ private fun Context.groupUserSenderConversations(
     result.addAll(grouped.values)
     result.sortByDescending { it.date }
     return result
+}
+
+/**
+ * Refreshes the in-memory thread id mapping used by the grouped conversation list,
+ * the grouped message view and notification cancellation.
+ */
+private fun updateSenderGroupingCache(
+    groupedThreadIds: Map<String, List<Long>>,
+    ungroupedThreadIds: Collection<List<Long>>,
+) {
+    SenderGrouping.updateGroups(groupedThreadIds.values + ungroupedThreadIds)
+    val threadIdToGroupId = HashMap<Long, String>()
+    groupedThreadIds.forEach { (groupId, threadIds) ->
+        threadIds.forEach { threadIdToGroupId[it] = groupId }
+    }
+    SenderGrouping.updateGroupIds(threadIdToGroupId)
 }
 
 fun Conversation.canGroupSenders(): Boolean {
@@ -778,10 +795,14 @@ fun Context.saveSenderGroupFromSelection(
         addresses = selectedAddresses,
         threadIds = threadIds.toList()
     )
-    SenderGrouping.mergeGroup(threadIds.toList())
+    SenderGrouping.mergeGroup(threadIds.toList(), keepId)
     SenderGrouping.pendingUiRefresh = true
     // stale per-sender notifications would otherwise keep the old sender name in the shade
     threadIds.forEach { notificationManager.cancel(it.hashCode()) }
+    // a group that was dissolved or rewritten leaves its old notification behind otherwise
+    existing.map { it.id }
+        .filter { id -> id != keepId && rewritten.none { it.id == id } }
+        .forEach { notificationManager.cancel(groupNotificationId(it)) }
 }
 
 fun Context.removeSenderGroupsForConversations(conversations: List<Conversation>) {
@@ -793,7 +814,9 @@ fun Context.removeSenderGroupsForConversations(conversations: List<Conversation>
     }
     config.senderGroups = config.senderGroups.filter { it.id !in groupIds }
     SenderGrouping.updateGroups(emptyList())
+    SenderGrouping.updateGroupIds(emptyMap())
     SenderGrouping.pendingUiRefresh = true
+    groupIds.forEach { notificationManager.cancel(groupNotificationId(it)) }
 }
 
 private fun Context.queryCursorUnsafe(

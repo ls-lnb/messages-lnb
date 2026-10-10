@@ -301,7 +301,7 @@ class ThreadActivity : SimpleActivity() {
 
         isActivityVisible = true
 
-        cancelNotificationsFor(threadId)
+        cancelNotificationsFor(threadId, conversation?.phoneNumber)
 
         ensureBackgroundThread {
             val newConv = conversationsDB.getConversationWithThreadId(threadId)
@@ -310,6 +310,8 @@ class ThreadActivity : SimpleActivity() {
                 runOnUiThread {
                     setupThreadTitle()
                 }
+                // resolve the group by address now that the conversation is loaded
+                cancelNotificationsFor(threadId, newConv.phoneNumber)
             }
 
             val smsDraft = getSmsDraft(threadId)
@@ -2097,7 +2099,7 @@ class ThreadActivity : SimpleActivity() {
         allMessagesFetched = false
 
         if (isActivityVisible) {
-            cancelNotificationsFor(threadId)
+            cancelNotificationsFor(threadId, conversation?.phoneNumber)
         }
 
         val messageSnapshot = messages.toSortedMessages()

@@ -76,6 +76,7 @@ class NotificationHelper(private val context: Context) {
         val markAsReadIntent = Intent(context, MarkAsReadReceiver::class.java).apply {
             action = MARK_AS_READ
             putExtra(THREAD_ID, threadId)
+            putExtra(THREAD_NUMBER, address)
         }
         val markAsReadPendingIntent =
             PendingIntent.getBroadcast(
@@ -87,6 +88,7 @@ class NotificationHelper(private val context: Context) {
 
         val deleteSmsIntent = Intent(context, DeleteSmsReceiver::class.java).apply {
             putExtra(THREAD_ID, threadId)
+            putExtra(THREAD_NUMBER, address)
             putExtra(MESSAGE_ID, messageId)
             putExtra(IS_MMS, isMms)
         }
@@ -327,20 +329,36 @@ fun groupNotificationId(groupId: String): Int = "sender_group_notification:$grou
  * Cancels the notification of [threadId] and, when it belongs to a sender group, the shared
  * group notification plus any leftover per-sender notifications of its other members.
  */
-fun Context.cancelNotificationsFor(threadId: Long) {
+/**
+ * Cancels the notification of [threadId] and, when it belongs to a sender group, the shared
+ * group notification plus any leftover per-sender notifications of its other members.
+ *
+ * [address] should be passed whenever it is known, because groups are resolved by address when
+ * notifications are posted and in the conversation list - resolving by thread id alone can miss
+ * the group (or pick a stale one) when the saved thread ids are out of date.
+ */
+fun Context.cancelNotificationsFor(threadId: Long, address: String? = null) {
     val manager = notificationManager
     manager.cancel(threadId.hashCode())
     if (config.senderGroups.isEmpty()) {
         return
     }
 
-    // config only lookup, this runs on the main thread from onResume
-    val group = findSenderGroup("", threadId) ?: return
+    val groups = config.senderGroups
+    val group = address?.let { senderAddress ->
+        groups.firstOrNull { it.containsAddress(senderAddress) }
+    }
+        ?: groups.firstOrNull { it.containsThreadId(threadId) }
+        ?: SenderGrouping.groupIdForThread(threadId)?.let { groupId ->
+            groups.firstOrNull { it.id == groupId }
+        }
+        ?: return
+
     manager.cancel(groupNotificationId(group.id))
     val related = if (SenderGrouping.hasMapping(threadId)) {
         SenderGrouping.relatedThreadIds(threadId)
     } else {
-        group.threadIds
+        (group.threadIds + threadId).distinct()
     }
     related.forEach { manager.cancel(it.hashCode()) }
 }

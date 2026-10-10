@@ -8,6 +8,7 @@ import org.fossify.messages.extensions.conversationsDB
 import org.fossify.messages.extensions.markThreadMessagesRead
 import org.fossify.messages.helpers.MARK_AS_READ
 import org.fossify.messages.helpers.THREAD_ID
+import org.fossify.messages.helpers.THREAD_NUMBER
 import org.fossify.messages.helpers.cancelNotificationsFor
 import org.fossify.messages.helpers.refreshConversations
 
@@ -16,7 +17,7 @@ class MarkAsReadReceiver : BroadcastReceiver() {
         when (intent.action) {
             MARK_AS_READ -> {
                 val threadId = intent.getLongExtra(THREAD_ID, 0L)
-                context.cancelNotificationsFor(threadId)
+                context.cancelNotificationsFor(threadId, intent.getStringExtra(THREAD_NUMBER))
                 ensureBackgroundThread {
                     context.markThreadMessagesRead(threadId)
                     context.conversationsDB.markRead(threadId)

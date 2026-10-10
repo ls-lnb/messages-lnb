@@ -53,7 +53,7 @@ class RecycleBinConversationsAdapter(
         val conversationsToRemove = currentList.filter { selectedKeys.contains(it.hashCode()) } as ArrayList<Conversation>
         conversationsToRemove.forEach {
             activity.deleteConversation(it.threadId)
-            activity.cancelNotificationsFor(it.threadId)
+            activity.cancelNotificationsFor(it.threadId, it.phoneNumber)
         }
 
         removeConversationsFromList(conversationsToRemove)
